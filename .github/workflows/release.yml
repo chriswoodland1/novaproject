@@ -1,0 +1,62 @@
+name: Release APK
+
+# Indítás: git tag push, pl.  git tag v1.0.0 && git push origin v1.0.0
+# Az app a GitHub Releases "latest" kiadását figyeli; a verziót a tagből kapja (v1.0.0 -> 1.0.0).
+on:
+  push:
+    tags: [ "v*" ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Aláíró kulcs visszaállítása a secretekből
+        env:
+          KEYSTORE_B64: ${{ secrets.NOVA_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::Hiányzik a NOVA_KEYSTORE_BASE64 secret. Lásd README → Aláírás. Állandó kulcs nélkül az app nem tud önmagára frissíteni."
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/nova.jks"
+          echo "NOVA_KEYSTORE_PATH=$RUNNER_TEMP/nova.jks" >> "$GITHUB_ENV"
+
+      - name: Verzió a tagből
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "NOVA_VERSION_NAME=${TAG#v}" >> "$GITHUB_ENV"
+          echo "NOVA_VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        env:
+          NOVA_KEYSTORE_PASSWORD: ${{ secrets.NOVA_KEYSTORE_PASSWORD }}
+          NOVA_KEY_ALIAS: ${{ secrets.NOVA_KEY_ALIAS }}
+          NOVA_KEY_PASSWORD: ${{ secrets.NOVA_KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon
+
+      - name: APK átnevezése
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/NovaProcess-${NOVA_VERSION_NAME}.apk"
+
+      - name: GitHub Release létrehozása
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.apk
+          generate_release_notes: true
