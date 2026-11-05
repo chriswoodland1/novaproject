@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -285,23 +286,24 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                 Image(base.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
                 androidx.compose.foundation.Canvas(Modifier.fillMaxSize().pointerInput(cropAspect) {
                     var mode = -1   // 0..3 sarok, 4 = mozgatás
-                    androidx.compose.foundation.gestures.detectDragGestures(
-                        onDragStart = { pos ->
+                    detectDragGestures(
+                        onDragStart = { pos: Offset ->
                             val fit = fitRect(size.width.toFloat(), size.height.toFloat(), base.width.toFloat(), base.height.toFloat())
                             val px = floatArrayOf(fit[0] + crop[0] * fit[2], fit[1] + crop[1] * fit[3], fit[0] + crop[2] * fit[2], fit[1] + crop[3] * fit[3])
                             val corners = listOf(Offset(px[0], px[1]), Offset(px[2], px[1]), Offset(px[0], px[3]), Offset(px[2], px[3]))
                             mode = corners.indexOfFirst { (it - pos).getDistance() < 56f }
                             if (mode < 0 && pos.x in px[0]..px[2] && pos.y in px[1]..px[3]) mode = 4
                         },
-                        onDrag = { change, drag ->
+                        onDrag = { change: androidx.compose.ui.input.pointer.PointerInputChange, drag: Offset ->
                             change.consume()
                             val fit = fitRect(size.width.toFloat(), size.height.toFloat(), base.width.toFloat(), base.height.toFloat())
                             val dx = drag.x / fit[2]; val dy = drag.y / fit[3]
+                            if (mode < 0) return@detectDragGestures
                             val c = crop.copyOf()
                             when (mode) {
                                 0 -> { c[0] += dx; c[1] += dy }; 1 -> { c[2] += dx; c[1] += dy }; 2 -> { c[0] += dx; c[3] += dy }; 3 -> { c[2] += dx; c[3] += dy }
                                 4 -> { val w = c[2] - c[0]; val h = c[3] - c[1]; c[0] = (c[0] + dx).coerceIn(0f, 1f - w); c[1] = (c[1] + dy).coerceIn(0f, 1f - h); c[2] = c[0] + w; c[3] = c[1] + h }
-                                else -> return@detectDragGestures
+                                else -> {}
                             }
                             // arányzár: a magasságot igazítjuk (képpixelben értve)
                             if (cropAspect > 0f && mode in 0..3) {
