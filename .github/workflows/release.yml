@@ -5,6 +5,11 @@ name: Release APK
 on:
   push:
     tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Verzió (pl. 1.0.0) – a workflow létrehozza a v1.0.0 taget"
+        required: true
 
 permissions:
   contents: write
@@ -39,10 +44,18 @@ jobs:
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/nova.jks"
           echo "NOVA_KEYSTORE_PATH=$RUNNER_TEMP/nova.jks" >> "$GITHUB_ENV"
 
-      - name: Verzió a tagből
+      - name: Verzió a tagből vagy a kézi bemenetből
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          echo "NOVA_VERSION_NAME=${TAG#v}" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VER="${{ github.event.inputs.version }}"; VER="${VER#v}"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "v$VER" -m "NovaProcess $VER"
+            git push origin "v$VER"
+          else
+            TAG="${GITHUB_REF_NAME}"; VER="${TAG#v}"
+          fi
+          echo "NOVA_VERSION_NAME=$VER" >> "$GITHUB_ENV"
           echo "NOVA_VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"
 
       - name: Build release APK
@@ -60,5 +73,7 @@ jobs:
       - name: GitHub Release létrehozása
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.NOVA_VERSION_NAME }}
+          name: NovaProcess ${{ env.NOVA_VERSION_NAME }}
           files: dist/*.apk
           generate_release_notes: true
