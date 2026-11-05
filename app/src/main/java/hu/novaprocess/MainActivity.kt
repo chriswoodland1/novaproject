@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
 }
 
 /** Alul lebegő, kapszula alakú navigáció (Darkroom). A képernyők maguk hagynak helyet neki. */
+@androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
 fun NovaRoot(vm: EditorViewModel) {
     val nav = rememberNavController()

@@ -27,7 +27,7 @@ import hu.novaprocess.ui.theme.LocalNightMode
 
 /** Darkroom lista-sor: cím balra, érték jobbra, vékony elválasztó. */
 @Composable
-fun RowItem(title: String, value: String, onClick: (() -> Unit)? = null, valueColor: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+fun RowItem(title: String, value: String, valueColor: Color = MaterialTheme.colorScheme.onSurfaceVariant, onClick: (() -> Unit)? = null) {
     Column {
         Row(
             Modifier.fillMaxWidth().let { if (onClick != null) it.clickable(onClick = onClick) else it }.padding(vertical = 15.dp),
