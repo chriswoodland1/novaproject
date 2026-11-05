@@ -273,29 +273,31 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun enqueueFolder(tree: Uri): Int = withContext(Dispatchers.IO) {
         val ctx = getApplication<Application>()
         val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, tree) ?: return@withContext 0
-        val groups = LinkedHashMap<String, MutableList<androidx.documentfile.provider.DocumentFile>>()
-        fun walk(d: androidx.documentfile.provider.DocumentFile, depth: Int, label: String) {
+        // csoport = egy konkrét mappa (nem összevonva); a név a mappa neve
+        data class Grp(val folderName: String, val isSub: Boolean, val files: List<androidx.documentfile.provider.DocumentFile>)
+        val groups = ArrayList<Grp>()
+        fun walk(d: androidx.documentfile.provider.DocumentFile, depth: Int) {
             val files = d.listFiles()
             val imgs = files.filter { !it.isDirectory }
-            if (imgs.isNotEmpty()) groups.getOrPut(label) { ArrayList() }.addAll(imgs)
-            if (depth < 3) files.filter { it.isDirectory }.forEach { sub ->
-                val n = sub.name ?: "mappa"
-                // a "_sub" almappa az objektum mappájához tartozik
-                val lbl = if (n.lowercase().endsWith("_sub") || n.lowercase() == "sub") label.ifBlank { n.removeSuffix("_sub") } else n
-                walk(sub, depth + 1, lbl)
-            }
+            val n = (d.name ?: "mappa").trim()
+            val isSub = n.lowercase().endsWith("_sub") || n.lowercase().endsWith("-sub") || n.lowercase() == "sub"
+            if (imgs.isNotEmpty()) groups.add(Grp(n, isSub, imgs))
+            if (depth < 3) files.filter { it.isDirectory }.forEach { walk(it, depth + 1) }
         }
-        walk(root, 0, root.name ?: "mappa")
-        var added = 0
+        walk(root, 0)
+        fun base(n: String) = n.removeSuffix("_sub").removeSuffix("-sub").removeSuffix("_SUB").trim()
+        // ha egy objektumhoz van _sub mappa, a sima (kész stacket tartalmazó) mappát kihagyjuk
+        val subBases = groups.filter { it.isSub }.map { base(it.folderName).lowercase() }.toSet()
         val newJobs = ArrayList<PipelineJob>()
-        for ((label, files) in groups) {
+        for (g in groups) {
+            if (!g.isSub && base(g.folderName).lowercase() in subBases) continue
             fun ext(f: androidx.documentfile.provider.DocumentFile) = (f.name ?: "").substringAfterLast('.', "").lowercase()
             fun isThumb(f: androidx.documentfile.provider.DocumentFile) = (f.name ?: "").lowercase().contains("_thn")
             fun isStacked(f: androidx.documentfile.provider.DocumentFile) = (f.name ?: "").lowercase().contains("stacked")
-            val fits = files.filter { ext(it) in setOf("fit", "fits") && !isStacked(it) }
-            val bins = files.filter { ext(it) in setOf("bin", "raw") && hu.novaprocess.image.BinReader.inferLayout(it.length(), hu.novaprocess.image.BinReader.dimsOverride(ctx)) != null }
-            val tifs = files.filter { ext(it) in setOf("tif", "tiff") }
-            val jpgs = files.filter { ext(it) in setOf("jpg", "jpeg", "png") && !isThumb(it) && !isStacked(it) }
+            val fits = g.files.filter { ext(it) in setOf("fit", "fits") && !isStacked(it) }
+            val bins = g.files.filter { ext(it) in setOf("bin", "raw") && hu.novaprocess.image.BinReader.inferLayout(it.length(), hu.novaprocess.image.BinReader.dimsOverride(ctx)) != null }
+            val tifs = g.files.filter { ext(it) in setOf("tif", "tiff") }
+            val jpgs = g.files.filter { ext(it) in setOf("jpg", "jpeg", "png") && !isThumb(it) && !isStacked(it) }
             val (pick, type) = when {
                 fits.size >= 2 -> fits to "FITS"
                 bins.size >= 2 -> bins to "bin"
@@ -303,11 +305,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 jpgs.size >= 2 -> jpgs to "JPEG"
                 else -> continue
             }
-            val name = label.removeSuffix("_sub").removeSuffix("-sub")
-            newJobs.add(PipelineJob("$name · $type (${pick.size})", pick.map { it.uri })); added++
+            newJobs.add(PipelineJob("${base(g.folderName)} · $type (${pick.size})", pick.map { it.uri }))
         }
         pipeline.update { st -> st.copy(jobs = st.jobs + newJobs.filter { nj -> st.jobs.none { it.name == nj.name } }) }
-        added
+        newJobs.size
     }
 
     /** Minden sorban álló munkára: elemzés → stack → automata szerkesztés → export (JPEG + keretes) a kiválasztott mappába. */
