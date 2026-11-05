@@ -346,7 +346,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                     val base = caption.value.title.ifBlank { "stack" }.replace(Regex("[^A-Za-z0-9_-]"), "_") + "_" + java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(java.util.Date())
                     withContext(Dispatchers.Default) {
                         val out = Processor.process(source!!, params.value)
-                        val bmp = Watermark.apply(ctx, out.toBitmap(), watermark.value)
+                        val bmp = Watermark.apply(ctx, withInfo(out.toBitmap()), watermark.value)
                         tree?.createFile("image/jpeg", "$base.jpg")?.uri?.let { u -> ctx.contentResolver.openOutputStream(u)!!.use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) } }
                         if (framed) tree?.createFile("image/jpeg", "${base}_keret.jpg")?.uri?.let { u -> ctx.contentResolver.openOutputStream(u)!!.use { framed(bmp).compress(Bitmap.CompressFormat.JPEG, 95, it) } }
                     }
@@ -451,6 +451,13 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------------------------------------------------------- felirat-adatok (keretes exporthoz)
     data class Caption(var title: String = "", var date: String = "", var frames: Int = 0, var exposure: Float = 0f, var instrument: String = "Seestar S30 Pro")
     val caption = MutableStateFlow(Caption())
+
+    // ---------------------------------------------------------------- adatfelirat (export)
+    val infoOverlay = MutableStateFlow(hu.novaprocess.process.InfoOverlay.load(app))
+    fun setInfoOverlay(s: hu.novaprocess.process.InfoOverlaySettings) { infoOverlay.value = s; hu.novaprocess.process.InfoOverlay.save(getApplication(), s) }
+    private fun infoData(): hu.novaprocess.process.InfoData { val c = caption.value; return hu.novaprocess.process.InfoData(c.title, infoOverlay.value.city, c.date, c.instrument, c.frames, c.exposure) }
+    private fun withInfo(b: Bitmap): Bitmap = hu.novaprocess.process.InfoOverlay.apply(b, infoOverlay.value, infoData())
+    fun infoPreview(): Bitmap? = _ui.value.preview?.let { withInfo(it.copy(Bitmap.Config.ARGB_8888, true)) }
 
     private fun captionFromFrames(used: Int) {
         val fs = frames.value.filter { !it.rejected }
@@ -649,7 +656,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun deco(b: Bitmap): Bitmap = sized(if (exportAnnotations.value) annotate(b) else b)
+    private fun deco(b: Bitmap): Bitmap = withInfo(sized(if (exportAnnotations.value) annotate(b) else b))
 
     /** Fekete keret + felirat: objektum · dátum · kockák × expozíció = integráció · eszköz · NovaProcess. */
     private fun framed(src: Bitmap): Bitmap {

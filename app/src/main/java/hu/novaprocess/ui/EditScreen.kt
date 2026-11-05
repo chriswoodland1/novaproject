@@ -543,6 +543,44 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: ()
                     androidx.compose.material3.OutlinedTextField(value = if (cap.exposure > 0f) "%.0f".format(cap.exposure) else "", onValueChange = { vm.caption.value = cap.copy(exposure = it.toFloatOrNull() ?: 0f) }, label = { Text("Expozíció (s)") }, singleLine = true, modifier = Modifier.weight(1f))
                 }
             }
+            val info by vm.infoOverlay.collectAsState()
+            val capI by vm.caption.collectAsState()
+            if (format != ExportFormat.TIFF16 && format != ExportFormat.FITS32) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Adatfelirat a képen", style = MaterialTheme.typography.titleMedium)
+                        Text(hu.novaprocess.process.InfoOverlay.lines(info.copy(enabled = true), hu.novaprocess.process.InfoData(capI.title, info.city, capI.date, capI.instrument, capI.frames, capI.exposure)).joinToString("  |  ").ifBlank { "nincs adat" }, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                    }
+                    androidx.compose.material3.Switch(checked = info.enabled, onCheckedChange = { vm.setInfoOverlay(info.copy(enabled = it)) })
+                }
+                if (info.enabled) {
+                    val infoPrev = remember(info, capI) { vm.infoPreview() }
+                    infoPrev?.let { Image(it.asImageBitmap(), contentDescription = "Felirat előnézet", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().height(170.dp).background(Color.Black)) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        androidx.compose.material3.OutlinedTextField(value = capI.title, onValueChange = { vm.caption.value = capI.copy(title = it) }, label = { Text("Objektum") }, singleLine = true, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.OutlinedTextField(value = info.city, onValueChange = { vm.setInfoOverlay(info.copy(city = it)) }, label = { Text("Város / hely") }, singleLine = true, modifier = Modifier.weight(1f))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        androidx.compose.material3.OutlinedTextField(value = capI.date, onValueChange = { vm.caption.value = capI.copy(date = it) }, label = { Text("Dátum") }, singleLine = true, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.OutlinedTextField(value = capI.instrument, onValueChange = { vm.caption.value = capI.copy(instrument = it) }, label = { Text("Eszköz") }, singleLine = true, modifier = Modifier.weight(1f))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        androidx.compose.material3.OutlinedTextField(value = if (capI.frames > 0) capI.frames.toString() else "", onValueChange = { vm.caption.value = capI.copy(frames = it.toIntOrNull() ?: 0) }, label = { Text("Kockák") }, singleLine = true, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.OutlinedTextField(value = if (capI.exposure > 0f) "%.0f".format(capI.exposure) else "", onValueChange = { vm.caption.value = capI.copy(exposure = it.toFloatOrNull() ?: 0f) }, label = { Text("Expozíció (s)") }, singleLine = true, modifier = Modifier.weight(1f))
+                    }
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Bal lent" to hu.novaprocess.process.WmPosition.BOTTOM_LEFT, "Jobb lent" to hu.novaprocess.process.WmPosition.BOTTOM_RIGHT, "Bal fent" to hu.novaprocess.process.WmPosition.TOP_LEFT, "Jobb fent" to hu.novaprocess.process.WmPosition.TOP_RIGHT).forEach { (l, pos) -> Pill(l, info.position == pos) { vm.setInfoOverlay(info.copy(position = pos)) } }
+                    }
+                    SmallSlider("Betűméret", info.sizePercent, 1f, 5f, { "%.1f %%".format(it) }) { vm.setInfoOverlay(info.copy(sizePercent = it)) }
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Pill("Objektum", info.showObject) { vm.setInfoOverlay(info.copy(showObject = !info.showObject)) }
+                        Pill("Hely", info.showCity) { vm.setInfoOverlay(info.copy(showCity = !info.showCity)) }
+                        Pill("Dátum", info.showDate) { vm.setInfoOverlay(info.copy(showDate = !info.showDate)) }
+                        Pill("Eszköz", info.showInstrument) { vm.setInfoOverlay(info.copy(showInstrument = !info.showInstrument)) }
+                        Pill("Összidő", info.showIntegration) { vm.setInfoOverlay(info.copy(showIntegration = !info.showIntegration)) }
+                    }
+                }
+            }
             val ann by vm.exportAnnotations.collectAsState()
             if (vm.solve.value.result != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Annotációk (objektumnevek) a képre", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
