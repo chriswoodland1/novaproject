@@ -515,9 +515,16 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: ()
     val ext = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG -> "jpg"; ExportFormat.PNG -> "png"; ExportFormat.TIFF16 -> "tif"; ExportFormat.FITS32 -> "fits" }
     val cap by vm.caption.collectAsState()
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(mime)) { uri -> if (uri != null) { vm.export(uri, format); onClose() } }
-    ModalBottomSheet(onDismissRequest = onClose, containerColor = cs.surface) {
-        Column(Modifier.padding(20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    ModalBottomSheet(onDismissRequest = onClose, containerColor = cs.surface, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+      Column(Modifier.fillMaxWidth()) {
+        // a Mentés gomb fixen a lap tetején-alján: a beállítások görgethetők
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Export", style = MaterialTheme.typography.headlineMedium)
+            androidx.compose.material3.Button(onClick = { save.launch("novaprocess_${System.currentTimeMillis()}.$ext") }, enabled = !exporting, shape = CircleShape, modifier = Modifier.height(44.dp)) {
+                Text(if (exporting) "Exportálás…" else "Mentés…")
+            }
+        }
+        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp).weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Pill("JPEG", format == ExportFormat.JPEG) { format = ExportFormat.JPEG }
                 Pill("PNG", format == ExportFormat.PNG) { format = ExportFormat.PNG }
@@ -595,5 +602,6 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: ()
                 Text(if (exporting) "Exportálás…" else "Mentés…")
             }
         }
+      }
     }
 }
