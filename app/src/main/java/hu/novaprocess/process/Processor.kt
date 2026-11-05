@@ -97,9 +97,16 @@ object Processor {
             val corr = conv(ratio)   // Gauss szimmetrikus → a tükrözött PSF ugyanaz
             for (i in est.indices) est[i] = (est[i] * corr[i]).coerceIn(0f, 1f)
         }
-        // a luminancia-arányt visszük át a csatornákra (színmegőrző)
+        // a luminancia-arányt visszük át a csatornákra (színmegőrző), csak a háttér fölötti struktúrákon
+        val med = median(lum); val madv = mad(lum, med) * 1.4826f
+        val lo = med + 2f * madv; val hi = med + 8f * madv
         val out = src
-        for (c in 0 until out.channels) { val a = out.data[c]; for (i in a.indices) { val f = if (lum[i] > eps) est[i] / lum[i] else 1f; a[i] = (a[i] * f.coerceIn(0f, 4f)).coerceIn(0f, 1f) } }
+        for (c in 0 until out.channels) { val a = out.data[c]; for (i in a.indices) {
+            val wgt = ((lum[i] - lo) / (hi - lo).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
+            if (wgt <= 0f) continue
+            val f = if (lum[i] > eps) (est[i] / lum[i]).coerceIn(0.25f, 4f) else 1f
+            a[i] = (a[i] * (1f + (f - 1f) * wgt)).coerceIn(0f, 1f)
+        } }
         return out
     }
 
@@ -416,8 +423,9 @@ object Processor {
         return ((m - 1f) * x) / ((2f * m - 1f) * x - m)
     }
     private fun mtfMidtoneFor(x: Float, target: Float): Float {
-        // MTF inverz: keressük m-et, amelyre mtf(m, x) = target (zárt alak)
-        return ((x - 1f) * target) / ((2f * target - 1f) * x - target)
+        // MTF inverz: m, amelyre mtf(m, x) = target.  (m-1)x = t((2m-1)x - m)  →  m = x(1-t) / (x - 2tx + t)
+        val den = x - 2f * target * x + target
+        return if (abs(den) < 1e-6f) 0.5f else (x * (1f - target) / den).coerceIn(0.001f, 0.999f)
     }
 
     // ---------------------------------------------------------------- csillagcsökkentés

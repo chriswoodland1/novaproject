@@ -190,38 +190,38 @@ object AutoEditor {
         p = when (a.type) {
             ObjectType.GALAXY -> {
                 notes += "Galaxis: autostretch + HDR magkompresszió + enyhe clarity"
-                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.2f, mtfShadowClip = 2.8f, hdrCompress = if (a.dynRange > 80f) 0.45f else 0.3f, hdrRadius = 24,
+                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.22f, mtfShadowClip = 2.8f, hdrCompress = if (a.dynRange > 80f) 0.4f else 0.25f, hdrRadius = 24,
                     starReduction = if (bloat) 0.4f else 0.25f, clarity = 0.15f, saturation = 0.15f, vibrance = 0.2f, deconvIterations = if (a.fwhm in 2f..4f) 6 else 0, deconvSigma = (a.fwhm / 2.355f).coerceIn(0.7f, 1.6f))
             }
             ObjectType.EMISSION_NEBULA -> {
                 notes += "Emissziós köd: asinh stretch + csillagtalan réteg (köd kiemelés), csillagok 60%-ra"
-                p.copy(stretchMode = StretchMode.ASINH, asinhStrength = asinhFor(bgAfterBe, 0.12f), starless = true, starlessRadius = if (bloat) 6 else 4, starsBlend = 0.6f, nebulaBoost = 0.2f,
+                p.copy(stretchMode = StretchMode.ASINH, asinhStrength = asinhFor(bgAfterBe, 0.16f), starless = true, starlessRadius = if (bloat) 6 else 4, starsBlend = 0.6f, nebulaBoost = 0.2f,
                     saturation = 0.2f, vibrance = 0.3f)
             }
             ObjectType.REFLECTION_NEBULA -> {
                 notes += "Reflexiós köd: asinh stretch, finom csillagcsökkentés, kék telítettség megtartva"
-                p.copy(stretchMode = StretchMode.ASINH, asinhStrength = asinhFor(bgAfterBe, 0.14f), starReduction = if (bloat) 0.35f else 0.2f, starRadius = 3, vibrance = 0.35f, scnr = 0f)
+                p.copy(stretchMode = StretchMode.ASINH, asinhStrength = asinhFor(bgAfterBe, 0.17f), starReduction = if (bloat) 0.35f else 0.2f, starRadius = 3, vibrance = 0.35f, scnr = 0f)
             }
             ObjectType.PLANETARY_NEBULA -> {
                 notes += "Planetáris köd: MTF stretch, HDR a fényes magra, dekonvolúció"
-                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.15f, hdrCompress = 0.5f, hdrRadius = 10, deconvIterations = 10, deconvSigma = (a.fwhm / 2.355f).coerceIn(0.8f, 1.5f), sharpen = 0.2f, saturation = 0.25f)
+                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.18f, hdrCompress = 0.5f, hdrRadius = 10, deconvIterations = 10, deconvSigma = (a.fwhm / 2.355f).coerceIn(0.8f, 1.5f), sharpen = 0.2f, saturation = 0.25f)
             }
             ObjectType.GLOBULAR -> {
                 notes += "Gömbhalmaz: asinh (a mag ne égjen ki) + HDR + dekonvolúció"
-                p.copy(stretchMode = StretchMode.ASINH, asinhStrength = asinhFor(bgAfterBe, 0.10f), hdrCompress = 0.5f, hdrRadius = 12, deconvIterations = 8, deconvSigma = (a.fwhm / 2.355f).coerceIn(0.8f, 1.5f), sharpen = 0.25f, saturation = 0.3f, denoise = denoise * 0.6f)
+                p.copy(stretchMode = StretchMode.ASINH, asinhStrength = asinhFor(bgAfterBe, 0.14f), hdrCompress = 0.5f, hdrRadius = 12, deconvIterations = 8, deconvSigma = (a.fwhm / 2.355f).coerceIn(0.8f, 1.5f), sharpen = 0.25f, saturation = 0.3f, denoise = denoise * 0.6f)
             }
             ObjectType.OPEN_CLUSTER, ObjectType.STARFIELD -> {
                 notes += "Nyílthalmaz / csillagmező: visszafogott autostretch, csillagszínek kiemelése"
-                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.16f, mtfShadowClip = 3f, saturation = 0.35f, vibrance = 0.2f, sharpen = 0.15f, denoise = denoise * 0.7f, starReduction = if (bloat) 0.25f else 0f)
+                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.2f, mtfShadowClip = 3f, saturation = 0.35f, vibrance = 0.2f, sharpen = 0.15f, denoise = denoise * 0.7f, starReduction = if (bloat) 0.25f else 0f)
             }
             ObjectType.UNKNOWN -> {
                 notes += "Típus bizonytalan: biztonságos autostretch + enyhe eszközök"
-                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.2f, saturation = 0.15f, starReduction = if (bloat) 0.3f else 0f)
+                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.22f, saturation = 0.15f, starReduction = if (bloat) 0.3f else 0f)
             }
         }
         if (a.extendedHue == "vörös+kék (dual-band)") notes += "Dual-band jellegű színek: a HOO paletta a Paletta fülön egy érintéssel kipróbálható"
 
-        // --- visszacsatolás: háttér 0.10–0.22, csúcs-vágás < 0.2 % ---
+        // --- visszacsatolás: háttér 0.14–0.27 (Siril-szerű ~0.2), csúcs-vágás < 0.2 % ---
         val probe = src.downscale(500)
         fun measure(pp: ProcessParams): Pair<Float, Float> {
             val out = Processor.process(probe, pp)
@@ -235,14 +235,14 @@ object AutoEditor {
             val m = measure(p); med = m.first; clipFrac = m.second; iters = iter
             var changed = false
             // arányos szabályozás: minél messzebb a cél (0.16), annál nagyobb lépés
-            if (med > 0.22f) { p = cooler(p, (0.16f / med).coerceIn(0.45f, 0.9f)); changed = true }
-            else if (med < 0.10f) { p = cooler(p, (0.16f / med.coerceAtLeast(0.02f)).coerceIn(1.1f, 2.2f)); changed = true }
+            if (med > 0.27f) { p = cooler(p, (0.20f / med).coerceIn(0.5f, 0.9f)); changed = true }
+            else if (med < 0.14f) { p = cooler(p, (0.20f / med.coerceAtLeast(0.02f)).coerceIn(1.1f, 2.2f)); changed = true }
             if (clipFrac > 0.002f) { p = p.copy(highlights = (p.highlights - 0.25f).coerceAtLeast(-0.8f), hdrCompress = min(0.7f, p.hdrCompress + 0.15f)); changed = true }
             if (!changed) break
         }
         // biztonsági háló: ha így sem jó, visszaesés egyszerű autostretch-re
-        if (med > 0.35f || med < 0.05f || clipFrac > 0.01f) {
-            p = p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.16f, mtfShadowClip = 2.8f, nebulaBoost = 0f, hdrCompress = min(p.hdrCompress, 0.3f), exposure = 0f, highlights = 0f, deconvIterations = 0)
+        if (med > 0.4f || med < 0.08f || clipFrac > 0.01f) {
+            p = p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.22f, mtfShadowClip = 2.8f, nebulaBoost = 0f, hdrCompress = min(p.hdrCompress, 0.3f), exposure = 0f, highlights = 0f, deconvIterations = 0)
             val m = measure(p); med = m.first; clipFrac = m.second
             notes += "A típus-specifikus stretch túl erős/gyenge volt → biztonságos autostretch"
         }
