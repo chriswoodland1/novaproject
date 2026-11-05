@@ -50,8 +50,12 @@ jobs:
             VER="${{ github.event.inputs.version }}"; VER="${VER#v}"
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag -a "v$VER" -m "NovaProcess $VER"
-            git push origin "v$VER"
+            if git ls-remote --exit-code --tags origin "v$VER" >/dev/null 2>&1; then
+              echo "A v$VER tag már létezik – a kiadás erre a tagre készül."
+            else
+              git tag -a "v$VER" -m "NovaProcess $VER"
+              git push origin "v$VER"
+            fi
           else
             TAG="${GITHUB_REF_NAME}"; VER="${TAG#v}"
           fi
