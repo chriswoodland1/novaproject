@@ -53,7 +53,6 @@ import hu.novaprocess.vm.EditorViewModel
 
 private val MIMES = arrayOf("image/*", "application/fits", "application/octet-stream", "*/*")
 
-@androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
 fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
     val ctx = LocalContext.current

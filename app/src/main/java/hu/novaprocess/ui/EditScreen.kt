@@ -128,7 +128,6 @@ private val CATEGORIES: List<Pair<String, List<Tool>>> = listOf(
     )
 )
 
-@androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
 fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     val ctx = LocalContext.current
@@ -226,7 +225,6 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     if (showExport) ExportSheet(vm, ui.exporting) { showExport = false }
 }
 
-@androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
 private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onClose: () -> Unit) {
     val cs = MaterialTheme.colorScheme
