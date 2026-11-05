@@ -627,6 +627,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         return out
     }
 
+    fun sourceWidth(): Int = source?.width ?: 1
+    fun sourceHeight(): Int = source?.height ?: 1
+
     fun clearMessage() { _ui.update { it.copy(message = null) } }
 
     companion object { const val PREVIEW_SIDE = 1100 }

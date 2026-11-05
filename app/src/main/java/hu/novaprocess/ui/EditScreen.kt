@@ -171,10 +171,7 @@ private val CATEGORIES: List<Pair<String, List<Tool>>> = listOf(
         Tool("rot", "Forgatás", get = { it.rotation.ordinal.toFloat() }, set = { p, v -> p.copy(rotation = Rotation.values()[v.toInt()]) },
             options = listOf("0°" to 0f, "90°" to 1f, "180°" to 2f, "270°" to 3f)),
         Tool("flip", "Tükrözés", get = { if (it.flipH) 1f else 0f }, set = { p, v -> p.copy(flipH = v > 0.5f) }, options = listOf("Ki" to 0f, "Vízszintes" to 1f)),
-        Tool("cl", "Vágás · bal", 0f, 0.45f, get = { it.cropLeft }, set = { p, v -> p.copy(cropLeft = v) }),
-        Tool("ct", "Vágás · felső", 0f, 0.45f, get = { it.cropTop }, set = { p, v -> p.copy(cropTop = v) }),
-        Tool("cr", "Vágás · jobb", 0.55f, 1f, get = { it.cropRight }, set = { p, v -> p.copy(cropRight = v) }),
-        Tool("cb", "Vágás · alsó", 0.55f, 1f, get = { it.cropBottom }, set = { p, v -> p.copy(cropBottom = v) })
+        Tool("cropui", "Vágás (keret a képen)", get = { 0f }, set = { p, _ -> p }, options = emptyList())
     )
 )
 
@@ -193,6 +190,10 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     var showWatermark by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var sampleMode by remember { mutableStateOf(false) }
+    // vágókeret: normalizált [l, t, r, b] a (vágatlan) forrásképen
+    var cropMode by remember { mutableStateOf(false) }
+    var crop by remember { mutableStateOf(floatArrayOf(0f, 0f, 1f, 1f)) }
+    var cropAspect by remember { mutableStateOf(0f) }   // 0 = szabad, különben szélesség/magasság
     val solve by vm.solve.collectAsState()
     var imgBox by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     var showHist by remember { mutableStateOf(true) }
@@ -225,7 +226,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                 .pointerInput(Unit) { detectTransformGestures { _, pan, zoom, _ -> scale = (scale * zoom).coerceIn(1f, 8f); offset = if (scale == 1f) Offset.Zero else offset + pan } }
                 .onSizeChanged { imgBox = it }
                 .pointerInput(sampleMode) { detectTapGestures(
-                    onPress = { if (!sampleMode) { showOriginal = true; tryAwaitRelease(); showOriginal = false } },
+                    onPress = { if (!sampleMode && !cropMode) { showOriginal = true; tryAwaitRelease(); showOriginal = false } },
                     onDoubleTap = { scale = 1f; offset = Offset.Zero },
                     onTap = { pos -> if (sampleMode) { val b = ui.preview; if (b != null && imgBox.width > 0) {
                         val fit = fitRect(imgBox.width.toFloat(), imgBox.height.toFloat(), b.width.toFloat(), b.height.toFloat())
@@ -276,6 +277,59 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.size(6.dp))
                 IconButton(onClick = { showExport = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.Download, contentDescription = "Export", tint = cs.onSurface) }
             }
+            // vágókeret
+            if (cropMode) ui.preview?.let { b ->
+                val srcW = vm.sourceWidth(); val srcH = vm.sourceHeight()
+                // a preview már vágva lehet → vágás módban a vágatlan előnézetet mutatjuk (originalPreview) a kereten belül
+                val base = ui.originalPreview ?: b
+                Image(base.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                androidx.compose.foundation.Canvas(Modifier.fillMaxSize().pointerInput(cropAspect) {
+                    var mode = -1   // 0..3 sarok, 4 = mozgatás
+                    androidx.compose.foundation.gestures.detectDragGestures(
+                        onDragStart = { pos ->
+                            val fit = fitRect(size.width.toFloat(), size.height.toFloat(), base.width.toFloat(), base.height.toFloat())
+                            val px = floatArrayOf(fit[0] + crop[0] * fit[2], fit[1] + crop[1] * fit[3], fit[0] + crop[2] * fit[2], fit[1] + crop[3] * fit[3])
+                            val corners = listOf(Offset(px[0], px[1]), Offset(px[2], px[1]), Offset(px[0], px[3]), Offset(px[2], px[3]))
+                            mode = corners.indexOfFirst { (it - pos).getDistance() < 56f }
+                            if (mode < 0 && pos.x in px[0]..px[2] && pos.y in px[1]..px[3]) mode = 4
+                        },
+                        onDrag = { change, drag ->
+                            change.consume()
+                            val fit = fitRect(size.width.toFloat(), size.height.toFloat(), base.width.toFloat(), base.height.toFloat())
+                            val dx = drag.x / fit[2]; val dy = drag.y / fit[3]
+                            val c = crop.copyOf()
+                            when (mode) {
+                                0 -> { c[0] += dx; c[1] += dy }; 1 -> { c[2] += dx; c[1] += dy }; 2 -> { c[0] += dx; c[3] += dy }; 3 -> { c[2] += dx; c[3] += dy }
+                                4 -> { val w = c[2] - c[0]; val h = c[3] - c[1]; c[0] = (c[0] + dx).coerceIn(0f, 1f - w); c[1] = (c[1] + dy).coerceIn(0f, 1f - h); c[2] = c[0] + w; c[3] = c[1] + h }
+                                else -> return@detectDragGestures
+                            }
+                            // arányzár: a magasságot igazítjuk (képpixelben értve)
+                            if (cropAspect > 0f && mode in 0..3) {
+                                val wPx = (c[2] - c[0]) * srcW; val hPx = wPx / cropAspect
+                                val hN = hPx / srcH
+                                if (mode == 0 || mode == 1) c[1] = c[3] - hN else c[3] = c[1] + hN
+                            }
+                            c[0] = c[0].coerceIn(0f, c[2] - 0.05f); c[1] = c[1].coerceIn(0f, c[3] - 0.05f); c[2] = c[2].coerceIn(c[0] + 0.05f, 1f); c[3] = c[3].coerceIn(c[1] + 0.05f, 1f)
+                            crop = c
+                        }
+                    )
+                }) {
+                    val fit = fitRect(size.width, size.height, base.width.toFloat(), base.height.toFloat())
+                    val l = fit[0] + crop[0] * fit[2]; val t = fit[1] + crop[1] * fit[3]; val r = fit[0] + crop[2] * fit[2]; val btm = fit[1] + crop[3] * fit[3]
+                    // sötétítés a kereten kívül
+                    val dim = Color.Black.copy(alpha = 0.55f)
+                    drawRect(dim, Offset(fit[0], fit[1]), androidx.compose.ui.geometry.Size(fit[2], t - fit[1]))
+                    drawRect(dim, Offset(fit[0], btm), androidx.compose.ui.geometry.Size(fit[2], fit[1] + fit[3] - btm))
+                    drawRect(dim, Offset(fit[0], t), androidx.compose.ui.geometry.Size(l - fit[0], btm - t))
+                    drawRect(dim, Offset(r, t), androidx.compose.ui.geometry.Size(fit[0] + fit[2] - r, btm - t))
+                    drawRect(Color.White, Offset(l, t), androidx.compose.ui.geometry.Size(r - l, btm - t), style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
+                    // harmadoló vonalak
+                    for (k in 1..2) { drawLine(Color.White.copy(alpha = 0.35f), Offset(l + (r - l) * k / 3f, t), Offset(l + (r - l) * k / 3f, btm), 1f); drawLine(Color.White.copy(alpha = 0.35f), Offset(l, t + (btm - t) * k / 3f), Offset(r, t + (btm - t) * k / 3f), 1f) }
+                    for (c in listOf(Offset(l, t), Offset(r, t), Offset(l, btm), Offset(r, btm))) { drawCircle(Color.White, 14f, c); drawCircle(Color.Black, 10f, c) }
+                }
+                Text("Vágás: ${((crop[2] - crop[0]) * srcW).toInt()} × ${((crop[3] - crop[1]) * srcH).toInt()} px · sarkoknál húzd, középen mozgasd",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurface, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 60.dp).background(Color.Black.copy(alpha = 0.6f)).padding(6.dp))
+            }
             // overlay: annotációk (plate solve) és háttér-mintapontok
             ui.preview?.let { b -> if (scale == 1f && ((solve.show && solve.result != null) || p.bgSamples.isNotEmpty())) {
                 androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
@@ -317,7 +371,39 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
             }
 
             Column(Modifier.padding(horizontal = 20.dp)) {
-                if (tool.options == null) {
+                if (tool.id == "cropui") {
+                    Text("Vágás", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                    if (!cropMode) {
+                        val hasCrop = p.cropLeft > 0f || p.cropTop > 0f || p.cropRight < 1f || p.cropBottom < 1f
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
+                            Pill("Vágókeret megnyitása", false) { crop = floatArrayOf(p.cropLeft, p.cropTop, p.cropRight, p.cropBottom); cropMode = true }
+                            if (hasCrop) Pill("Vágás törlése", false) { vm.commitParams { it.copy(cropLeft = 0f, cropTop = 0f, cropRight = 1f, cropBottom = 1f) } }
+                        }
+                        Text(if (hasCrop) "Jelenlegi vágás: ${((p.cropRight - p.cropLeft) * vm.sourceWidth()).toInt()} × ${((p.cropBottom - p.cropTop) * vm.sourceHeight()).toInt()} px (eredeti felbontás, nincs átméretezés)" else "Nincs vágás. A vágás csak kivág; a felbontás megmarad, átméretezés csak az export méret-presetjeivel történik.",
+                            style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
+                    } else {
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("Szabad" to 0f, "1:1" to 1f, "4:5" to 0.8f, "3:2" to 1.5f, "16:9" to 16f / 9f, "9:16" to 9f / 16f, "2:3" to 2f / 3f).forEach { (lbl, a) ->
+                                Pill(lbl, cropAspect == a) {
+                                    cropAspect = a
+                                    if (a > 0f) { // a jelenlegi keretet az arányhoz igazítjuk a közepe körül
+                                        val srcW = vm.sourceWidth().toFloat(); val srcH = vm.sourceHeight().toFloat()
+                                        val cx = (crop[0] + crop[2]) / 2f; val cy = (crop[1] + crop[3]) / 2f
+                                        var wN = crop[2] - crop[0]; var hN = (wN * srcW / a) / srcH
+                                        if (hN > 1f) { hN = 1f; wN = (hN * srcH * a) / srcW }
+                                        val l = (cx - wN / 2f).coerceIn(0f, 1f - wN); val t = (cy - hN / 2f).coerceIn(0f, 1f - hN)
+                                        crop = floatArrayOf(l, t, l + wN, t + hN)
+                                    }
+                                }
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 10.dp)) {
+                            Pill("Alkalmaz", true) { vm.commitParams { it.copy(cropLeft = crop[0], cropTop = crop[1], cropRight = crop[2], cropBottom = crop[3]) }; cropMode = false }
+                            Pill("Mégse", false) { cropMode = false }
+                            Pill("Teljes kép", false) { crop = floatArrayOf(0f, 0f, 1f, 1f) }
+                        }
+                    }
+                } else if (tool.options == null) {
                     BigSlider(tool.label, tool.get(p), tool.min, tool.max, tool.fmt,
                         onDragStart = { vm.beginDrag() }, onChange = { v -> vm.previewParams { tool.set(it, v) } }, onDragEnd = { vm.endDrag() })
                 } else {
