@@ -2,6 +2,8 @@ package hu.novaprocess.process
 
 enum class StretchMode { NONE, AUTO, ASINH, MTF }
 enum class Rotation { R0, R90, R180, R270 }
+enum class Palette { NATURAL, HOO, SHO_LIKE, FORAXX }
+enum class MaskMode { NONE, HIGHLIGHTS, SHADOWS, RANGE }
 
 /** Minden csúszka értéke. Az alapértékek "semleges" feldolgozást adnak (csak autostretch). */
 data class ProcessParams(
@@ -24,6 +26,26 @@ data class ProcessParams(
     val starRadius: Int = 2,                  // 1..5 px
     val denoise: Float = 0f,                  // 0..1
     val denoiseRadius: Int = 2,
+
+    // --- 1.2: haladó asztro ---
+    val scnr: Float = 0f,                     // zöld-elnyomás 0..1
+    val deconvIterations: Int = 0,            // Richardson–Lucy iterációk 0..30
+    val deconvSigma: Float = 1.2f,            // PSF szigma px 0.5..3
+    val hdrCompress: Float = 0f,              // magkompresszió 0..1
+    val hdrRadius: Int = 20,                  // helyi tónusleképezés sugara
+    val starless: Boolean = false,            // csillagtalanítás külön rétegre
+    val starlessRadius: Int = 4,              // csillag-eltávolítás sugara
+    val starsBlend: Float = 1f,               // csillagok visszakeverése 0..1
+    val nebulaBoost: Float = 0f,              // extra stretch a csillagtalan rétegen 0..1
+    val palette: Palette = Palette.NATURAL,
+    val paletteStrength: Float = 1f,          // 0..1
+    val curveShadows: Float = 0f,             // görbe pontok eltolása -1..1
+    val curveMidtones: Float = 0f,
+    val curveHighlights: Float = 0f,
+    val curveLuminanceOnly: Boolean = true,
+    val maskMode: MaskMode = MaskMode.NONE,   // a fotós beállítások maszkolása
+    val maskLow: Float = 0.2f, val maskHigh: Float = 0.8f, val maskFeather: Float = 0.1f,
+    val maskInvert: Boolean = false,
 
     // --- Fotó (nemlineáris térben, Lightroom-szerű) ---
     val exposure: Float = 0f,                 // EV, -3..3

@@ -56,6 +56,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import hu.novaprocess.process.MaskMode
+import hu.novaprocess.process.Palette
 import hu.novaprocess.process.ProcessParams
 import hu.novaprocess.process.Rotation
 import hu.novaprocess.process.StretchMode
@@ -104,11 +106,39 @@ private val CATEGORIES: List<Pair<String, List<Tool>>> = listOf(
         Tool("bp", "Feketepont", 0f, 0.3f, { "%.3f".format(it) }, get = { it.blackPoint }, set = { p, v -> p.copy(blackPoint = v) }),
         Tool("bge", "Háttér-gradiens kivonás", get = { if (!it.backgroundExtraction) 0f else it.backgroundDegree.toFloat() },
             set = { p, v -> p.copy(backgroundExtraction = v > 0f, backgroundDegree = if (v > 0f) v.toInt() else p.backgroundDegree) },
-            options = listOf("Ki" to 0f, "Sík" to 1f, "Másodfokú" to 2f))
+            options = listOf("Ki" to 0f, "Sík" to 1f, "Másodfokú" to 2f)),
+        Tool("scnr", "SCNR zöld-elnyomás", 0f, 1f, get = { it.scnr }, set = { p, v -> p.copy(scnr = v) }),
+        Tool("hdr", "HDR magkompresszió", 0f, 1f, get = { it.hdrCompress }, set = { p, v -> p.copy(hdrCompress = v) }),
+        Tool("hdrr", "HDR sugár", 4f, 60f, { "%.0f".format(it) }, get = { it.hdrRadius.toFloat() }, set = { p, v -> p.copy(hdrRadius = v.toInt()) }),
+        Tool("dci", "Dekonvolúció · iteráció", 0f, 30f, { "%.0f".format(it) }, get = { it.deconvIterations.toFloat() }, set = { p, v -> p.copy(deconvIterations = v.toInt()) }),
+        Tool("dcs", "Dekonvolúció · PSF szigma", 0.5f, 3f, get = { it.deconvSigma }, set = { p, v -> p.copy(deconvSigma = v) })
     ),
     "Csillag" to listOf(
-        Tool("sr", "Csillagcsökkentés", 0f, 1f, get = { it.starReduction }, set = { p, v -> p.copy(starReduction = v) }),
+        Tool("stl", "Csillagtalanítás (külön réteg)", get = { if (it.starless) 1f else 0f }, set = { p, v -> p.copy(starless = v > 0.5f) }, options = listOf("Ki" to 0f, "Be" to 1f)),
+        Tool("stlr", "Csillag-eltávolítás sugara", 2f, 12f, { "%.0f".format(it) }, get = { it.starlessRadius.toFloat() }, set = { p, v -> p.copy(starlessRadius = v.toInt()) }),
+        Tool("stb", "Csillagok visszakeverése", 0f, 1f, get = { it.starsBlend }, set = { p, v -> p.copy(starsBlend = v) }),
+        Tool("neb", "Köd kiemelése (csillagtalan réteg)", 0f, 1f, get = { it.nebulaBoost }, set = { p, v -> p.copy(nebulaBoost = v) }),
+        Tool("sr", "Csillagcsökkentés (egyszerű)", 0f, 1f, get = { it.starReduction }, set = { p, v -> p.copy(starReduction = v) }),
         Tool("srr", "Csillag sugár (px)", 1f, 5f, { "%.0f".format(it) }, get = { it.starRadius.toFloat() }, set = { p, v -> p.copy(starRadius = v.toInt()) })
+    ),
+    "Paletta" to listOf(
+        Tool("pal", "Narrowband paletta", get = { it.palette.ordinal.toFloat() }, set = { p, v -> p.copy(palette = Palette.values()[v.toInt()]) },
+            options = listOf("Természetes" to 0f, "HOO" to 1f, "SHO-szerű" to 2f, "Foraxx" to 3f)),
+        Tool("pals", "Paletta erőssége", 0f, 1f, get = { it.paletteStrength }, set = { p, v -> p.copy(paletteStrength = v) })
+    ),
+    "Görbék" to listOf(
+        Tool("cs", "Görbe · árnyékok", -1f, 1f, get = { it.curveShadows }, set = { p, v -> p.copy(curveShadows = v) }),
+        Tool("cm", "Görbe · középtónusok", -1f, 1f, get = { it.curveMidtones }, set = { p, v -> p.copy(curveMidtones = v) }),
+        Tool("ch", "Görbe · csúcsfények", -1f, 1f, get = { it.curveHighlights }, set = { p, v -> p.copy(curveHighlights = v) }),
+        Tool("clo", "Görbe célja", get = { if (it.curveLuminanceOnly) 1f else 0f }, set = { p, v -> p.copy(curveLuminanceOnly = v > 0.5f) }, options = listOf("RGB" to 0f, "Luminancia" to 1f))
+    ),
+    "Maszk" to listOf(
+        Tool("mm", "Maszk (Fény/Szín/Görbék hatására)", get = { it.maskMode.ordinal.toFloat() }, set = { p, v -> p.copy(maskMode = MaskMode.values()[v.toInt()]) },
+            options = listOf("Nincs" to 0f, "Csúcsfények" to 1f, "Árnyékok" to 2f, "Tartomány" to 3f)),
+        Tool("ml", "Tartomány · alsó", 0f, 1f, get = { it.maskLow }, set = { p, v -> p.copy(maskLow = v) }),
+        Tool("mh", "Tartomány · felső", 0f, 1f, get = { it.maskHigh }, set = { p, v -> p.copy(maskHigh = v) }),
+        Tool("mf", "Lágyítás", 0.01f, 0.5f, get = { it.maskFeather }, set = { p, v -> p.copy(maskFeather = v) }),
+        Tool("mi", "Invertálás", get = { if (it.maskInvert) 1f else 0f }, set = { p, v -> p.copy(maskInvert = v > 0.5f) }, options = listOf("Ki" to 0f, "Be" to 1f))
     ),
     "Részlet" to listOf(
         Tool("dn", "Zajszűrés", 0f, 1f, get = { it.denoise }, set = { p, v -> p.copy(denoise = v) }),

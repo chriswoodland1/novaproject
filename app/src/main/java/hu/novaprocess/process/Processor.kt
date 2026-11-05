@@ -7,6 +7,7 @@ import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.sqrt
 
 /**
  * A teljes feldolgozó lánc. Sorrend (Siril-munkafolyamat szerint):
@@ -18,15 +19,194 @@ object Processor {
 
     fun process(src: FloatImage, p: ProcessParams): FloatImage {
         var img = geometry(src, p)
+        // --- lineáris lépések ---
         if (p.backgroundExtraction) img = backgroundExtraction(img, p.backgroundDegree)
         if (p.backgroundNeutralize) img = neutralizeBackground(img)
         if (p.whiteBalanceStars) img = whiteBalanceOnStars(img)
+        if (p.scnr > 0f) img = scnr(img, p.scnr)
+        if (p.deconvIterations > 0) img = deconvolve(img, p.deconvSigma, p.deconvIterations)
+        if (p.palette != Palette.NATURAL) img = palette(img, p.palette, p.paletteStrength)
+        // --- stretch ---
         img = stretch(img, p)
-        if (p.starReduction > 0f) img = reduceStars(img, p.starReduction, p.starRadius)
+        if (p.hdrCompress > 0f) img = hdrCompress(img, p.hdrCompress, p.hdrRadius)
+        // --- csillagok ---
+        if (p.starless) img = starlessComposite(img, p)
+        else if (p.starReduction > 0f) img = reduceStars(img, p.starReduction, p.starRadius)
         if (p.denoise > 0f) img = denoise(img, p.denoise, p.denoiseRadius)
+        // --- görbék + fotós beállítások, opcionális maszkkal ---
+        val base = if (p.maskMode != MaskMode.NONE) img.copy() else null
+        if (p.curveShadows != 0f || p.curveMidtones != 0f || p.curveHighlights != 0f) img = curves(img, p)
         img = photoAdjust(img, p)
+        if (base != null) img = blendByMask(base, img, p)
         img.clampInPlace()
         return img
+    }
+
+    // ---------------------------------------------------------------- SCNR (zöld-elnyomás, average neutral)
+    fun scnr(src: FloatImage, amount: Float): FloatImage {
+        if (src.channels != 3) return src
+        val out = src.copy()
+        val r = out.data[0]; val g = out.data[1]; val b = out.data[2]
+        for (i in 0 until out.size) {
+            val m = (r[i] + b[i]) * 0.5f
+            if (g[i] > m) g[i] = g[i] + (m - g[i]) * amount
+        }
+        return out
+    }
+
+    // ---------------------------------------------------------------- Richardson–Lucy dekonvolúció (Gauss PSF)
+    fun deconvolve(src: FloatImage, sigma: Float, iterations: Int): FloatImage {
+        val w = src.width; val h = src.height
+        val lum = src.toMono().data[0]
+        val r = (sigma * 3f).toInt().coerceIn(1, 9)
+        val k = FloatArray(2 * r + 1) { exp(-((it - r) * (it - r)) / (2f * sigma * sigma)) }
+        val ks = k.sum(); for (i in k.indices) k[i] /= ks
+        fun conv(a: FloatArray): FloatArray {
+            val t = FloatArray(a.size); val o = FloatArray(a.size)
+            hu.novaprocess.image.Par.rows(h) { y0, y1 -> for (y in y0 until y1) for (x in 0 until w) { var s = 0f; for (d in -r..r) s += a[y * w + (x + d).coerceIn(0, w - 1)] * k[d + r]; t[y * w + x] = s } }
+            hu.novaprocess.image.Par.rows(h) { y0, y1 -> for (y in y0 until y1) for (x in 0 until w) { var s = 0f; for (d in -r..r) s += t[(y + d).coerceIn(0, h - 1) * w + x] * k[d + r]; o[y * w + x] = s } }
+            return o
+        }
+        var est = lum.copyOf()
+        val eps = 1e-5f
+        repeat(iterations) {
+            val blurred = conv(est)
+            val ratio = FloatArray(lum.size) { lum[it] / (blurred[it] + eps) }
+            val corr = conv(ratio)   // Gauss szimmetrikus → a tükrözött PSF ugyanaz
+            for (i in est.indices) est[i] = (est[i] * corr[i]).coerceIn(0f, 1f)
+        }
+        // a luminancia-arányt visszük át a csatornákra (színmegőrző)
+        val out = src.copy()
+        for (c in 0 until out.channels) { val a = out.data[c]; for (i in a.indices) { val f = if (lum[i] > eps) est[i] / lum[i] else 1f; a[i] = (a[i] * f.coerceIn(0f, 4f)).coerceIn(0f, 1f) } }
+        return out
+    }
+
+    // ---------------------------------------------------------------- HDR magkompresszió (helyi tónusleképezés)
+    fun hdrCompress(src: FloatImage, amount: Float, radius: Int): FloatImage {
+        val lum = src.toMono().data[0]
+        val blur = boxBlur(lum, src.width, src.height, radius.coerceAtLeast(2))
+        val out = src.copy()
+        val k = amount * 3f
+        for (c in 0 until out.channels) {
+            val a = out.data[c]
+            for (i in a.indices) {
+                // a fényes, nagy kiterjedésű területeket (mag) nyomjuk le, a finom részletet megtartva
+                val local = blur[i]
+                val gain = (1f + k) / (1f + k * local)
+                a[i] = (a[i] * gain * (1f - amount * 0.25f)).coerceIn(0f, 1f)
+            }
+        }
+        return out
+    }
+
+    // ---------------------------------------------------------------- csillagtalanítás + visszakeverés
+    /**
+     * Klasszikus (nem neurális) csillagtalanítás: morfológiai nyitás + a lyukak lágy kitöltése,
+     * majd a csillagréteg = eredeti − csillagtalan. A csillagtalan rétegre extra stretch tehető
+     * (köd kiemelése), a csillagok pedig tetszőleges arányban visszakeverhetők.
+     */
+    fun starlessComposite(src: FloatImage, p: ProcessParams): FloatImage {
+        val w = src.width; val h = src.height
+        val out = FloatImage(w, h, src.channels)
+        val r = p.starlessRadius.coerceIn(2, 12)
+        for (c in 0 until src.channels) {
+            val a = src.data[c]
+            val opened = maxFilter(minFilter(a, w, h, r), w, h, r)
+            val filled = boxBlur(opened, w, h, r)   // lágyítás, hogy ne maradjon "lyuk" a csillag helyén
+            val starless = FloatArray(a.size) { i -> min(a[i], max(opened[i], filled[i] * 0.5f + opened[i] * 0.5f)) }
+            val o = out.data[c]
+            for (i in a.indices) {
+                var neb = starless[i]
+                if (p.nebulaBoost > 0f) {
+                    val k = 1f + p.nebulaBoost * 6f
+                    neb = (asinh(k * neb) / asinh(k))
+                }
+                val star = (a[i] - starless[i]).coerceAtLeast(0f)
+                o[i] = (neb + star * p.starsBlend).coerceIn(0f, 1f)
+            }
+        }
+        return out
+    }
+
+    // ---------------------------------------------------------------- narrowband paletták (dual-band szűrős OSC képekhez)
+    fun palette(src: FloatImage, mode: Palette, strength: Float): FloatImage {
+        if (src.channels != 3) return src
+        val out = src.copy()
+        val r = out.data[0]; val g = out.data[1]; val b = out.data[2]
+        for (i in 0 until out.size) {
+            val ha = r[i]                       // dual-band OSC: R ≈ Hα, G+B ≈ OIII
+            val o3 = (g[i] + b[i]) * 0.5f
+            val (nr, ng, nb) = when (mode) {
+                Palette.HOO -> Triple(ha, o3, o3)
+                Palette.SHO_LIKE -> Triple(ha * 0.6f + o3 * 0.4f, ha, o3)           // Hubble-szerű arany/kék
+                Palette.FORAXX -> { val mix = ha * o3; Triple(ha, (o3 * o3 * ha + mix * (1f - o3)).coerceIn(0f, 1f), o3) }
+                Palette.NATURAL -> Triple(r[i], g[i], b[i])
+            }
+            r[i] = r[i] + (nr - r[i]) * strength
+            g[i] = g[i] + (ng - g[i]) * strength
+            b[i] = b[i] + (nb - b[i]) * strength
+        }
+        return out
+    }
+
+    // ---------------------------------------------------------------- görbék (3 vezérlőpont, monoton spline)
+    fun curves(src: FloatImage, p: ProcessParams): FloatImage {
+        val xs = floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+        val ys = floatArrayOf(0f, (0.25f + p.curveShadows * 0.2f).coerceIn(0f, 1f), (0.5f + p.curveMidtones * 0.25f).coerceIn(0f, 1f), (0.75f + p.curveHighlights * 0.2f).coerceIn(0f, 1f), 1f)
+        val lut = FloatArray(4096) { monotoneSpline(xs, ys, it / 4095f) }
+        val out = src
+        if (p.curveLuminanceOnly && src.channels == 3) {
+            val r = out.data[0]; val g = out.data[1]; val b = out.data[2]
+            for (i in 0 until out.size) {
+                val l = 0.299f * r[i] + 0.587f * g[i] + 0.114f * b[i]
+                val nl = lut[(l.coerceIn(0f, 1f) * 4095f).toInt()]
+                val f = if (l > 1e-5f) nl / l else 1f
+                r[i] = (r[i] * f).coerceIn(0f, 1f); g[i] = (g[i] * f).coerceIn(0f, 1f); b[i] = (b[i] * f).coerceIn(0f, 1f)
+            }
+        } else for (c in 0 until out.channels) { val a = out.data[c]; for (i in a.indices) a[i] = lut[(a[i].coerceIn(0f, 1f) * 4095f).toInt()] }
+        return out
+    }
+
+    /** Fritsch–Carlson monoton köbös interpoláció. */
+    private fun monotoneSpline(xs: FloatArray, ys: FloatArray, x: Float): Float {
+        val n = xs.size
+        val d = FloatArray(n - 1) { (ys[it + 1] - ys[it]) / (xs[it + 1] - xs[it]) }
+        val m = FloatArray(n)
+        m[0] = d[0]; m[n - 1] = d[n - 2]
+        for (i in 1 until n - 1) m[i] = if (d[i - 1] * d[i] <= 0f) 0f else (d[i - 1] + d[i]) / 2f
+        for (i in 0 until n - 1) if (d[i] == 0f) { m[i] = 0f; m[i + 1] = 0f } else {
+            val a = m[i] / d[i]; val b = m[i + 1] / d[i]; val s = a * a + b * b
+            if (s > 9f) { val t = 3f / sqrt(s); m[i] = t * a * d[i]; m[i + 1] = t * b * d[i] }
+        }
+        var i = 0; while (i < n - 2 && x > xs[i + 1]) i++
+        val hh = xs[i + 1] - xs[i]; val t = ((x - xs[i]) / hh).coerceIn(0f, 1f)
+        val t2 = t * t; val t3 = t2 * t
+        return ((2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * hh * m[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * hh * m[i + 1]).coerceIn(0f, 1f)
+    }
+
+    // ---------------------------------------------------------------- maszk
+    fun mask(img: FloatImage, p: ProcessParams): FloatArray {
+        val lum = boxBlur(img.toMono().data[0], img.width, img.height, 2)
+        val f = p.maskFeather.coerceAtLeast(0.01f)
+        val m = FloatArray(lum.size) { i ->
+            val l = lum[i]
+            val v = when (p.maskMode) {
+                MaskMode.HIGHLIGHTS -> l
+                MaskMode.SHADOWS -> 1f - l
+                MaskMode.RANGE -> smooth01((l - (p.maskLow - f)) / f) * (1f - smooth01((l - p.maskHigh) / f))
+                MaskMode.NONE -> 1f
+            }
+            if (p.maskInvert) 1f - v else v
+        }
+        return m
+    }
+    private fun smooth01(x: Float): Float { val t = x.coerceIn(0f, 1f); return t * t * (3f - 2f * t) }
+
+    private fun blendByMask(base: FloatImage, adjusted: FloatImage, p: ProcessParams): FloatImage {
+        val m = mask(base, p)
+        val out = adjusted
+        for (c in 0 until out.channels) { val a = out.data[c]; val b = base.data[c]; for (i in a.indices) a[i] = b[i] + (a[i] - b[i]) * m[i] }
+        return out
     }
 
     // ---------------------------------------------------------------- geometria
