@@ -96,7 +96,8 @@ private val CATEGORIES: List<Pair<String, List<Tool>>> = listOf(
         Tool("r", "Vörös", -0.5f, 0.5f, get = { it.redBalance }, set = { p, v -> p.copy(redBalance = v) }),
         Tool("g", "Zöld", -0.5f, 0.5f, get = { it.greenBalance }, set = { p, v -> p.copy(greenBalance = v) }),
         Tool("b", "Kék", -0.5f, 0.5f, get = { it.blueBalance }, set = { p, v -> p.copy(blueBalance = v) }),
-        Tool("bgn", "Háttér semlegesítés", get = { if (it.backgroundNeutralize) 1f else 0f }, set = { p, v -> p.copy(backgroundNeutralize = v > 0.5f) }, options = listOf("Ki" to 0f, "Be" to 1f)),
+        Tool("bgn", "Háttér semlegesítés", get = { if (!it.backgroundNeutralize) 0f else if (it.neutralizeAfterStretch) 2f else 1f },
+            set = { p, v -> p.copy(backgroundNeutralize = v > 0f, neutralizeAfterStretch = v > 1.5f) }, options = listOf("Ki" to 0f, "Stretch előtt" to 1f, "Előtt + után" to 2f)),
         Tool("wb", "Fehéregyensúly csillagokra", get = { if (it.whiteBalanceStars) 1f else 0f }, set = { p, v -> p.copy(whiteBalanceStars = v > 0.5f) }, options = listOf("Ki" to 0f, "Be" to 1f))
     ),
     "Asztro" to listOf(

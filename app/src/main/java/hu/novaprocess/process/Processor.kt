@@ -21,13 +21,15 @@ object Processor {
         var img = geometry(src, p)
         // --- lineáris lépések ---
         if (p.backgroundExtraction) img = backgroundExtraction(img, p.backgroundDegree)
-        if (p.backgroundNeutralize) img = neutralizeBackground(img)
+        // előbb a csatorna-erősítés (fehéregyensúly), utána az eltolás (háttér-semlegesítés) – így a háttér semleges marad a stretchig
         if (p.whiteBalanceStars) img = whiteBalanceOnStars(img)
+        if (p.backgroundNeutralize) img = neutralizeBackground(img)
         if (p.scnr > 0f) img = scnr(img, p.scnr)
         if (p.deconvIterations > 0) img = deconvolve(img, p.deconvSigma, p.deconvIterations)
         if (p.palette != Palette.NATURAL) img = palette(img, p.palette, p.paletteStrength)
         // --- stretch ---
         img = stretch(img, p)
+        if (p.neutralizeAfterStretch) img = neutralizeBackground(img)
         if (p.hdrCompress > 0f) img = hdrCompress(img, p.hdrCompress, p.hdrRadius)
         // --- csillagok ---
         if (p.starless) img = starlessComposite(img, p)
@@ -355,7 +357,8 @@ object Processor {
     fun neutralizeBackground(src: FloatImage): FloatImage {
         if (src.channels != 3) return src
         val out = src
-        val meds = FloatArray(3) { median(out.data[it]) }
+        // a háttér = az alsó 30. percentilis csatornánként (nagy objektumnál a medián már a ködöt mérné)
+        val meds = FloatArray(3) { percentile(out.data[it], 0.3f) }
         val target = meds.average().toFloat()
         for (c in 0 until 3) { val a = out.data[c]; val d = target - meds[c]; for (i in a.indices) a[i] = (a[i] + d).coerceAtLeast(0f) }
         return out

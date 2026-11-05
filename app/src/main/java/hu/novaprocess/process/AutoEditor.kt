@@ -172,7 +172,9 @@ object AutoEditor {
         }
         // színcast
         val castMax = a.cast.maxOf { abs(it) }
-        if (castMax > 0.03f) { notes += "Színcast a háttérben (${"%.0f".format(castMax * 100)}%) → háttér semlegesítés"; p = p.copy(backgroundNeutralize = true) }
+        // OSC (Bayer) képnél a háttér mindig kap semlegesítést a stretch előtt és után – a stretch a pici eltérést is erős castté erősíti
+        notes += if (castMax > 0.03f) "Színcast a háttérben (${"%.0f".format(castMax * 100)}%) → háttér semlegesítés stretch előtt és után" else "Háttér semlegesítés (stretch előtt és után), hogy ne legyen színcast"
+        p = p.copy(backgroundNeutralize = true, neutralizeAfterStretch = true)
         if (a.stars >= 30) { notes += "${a.stars} csillag → fehéregyensúly csillagokra"; p = p.copy(whiteBalanceStars = true) }
         if (a.greenExcess > 0.06f) { notes += "Zöld többlet a jelben → SCNR"; p = p.copy(scnr = 0.6f) }
 
@@ -223,11 +225,17 @@ object AutoEditor {
 
         // --- visszacsatolás: háttér 0.14–0.27 (Siril-szerű ~0.2), csúcs-vágás < 0.2 % ---
         val probe = src.downscale(500)
+        var lastCast = 0f
         fun measure(pp: ProcessParams): Pair<Float, Float> {
             val out = Processor.process(probe, pp)
             val lum = out.toMono().data[0]
             val med = Processor.median(lum)
             var clip = 0; for (v in lum) if (v >= 0.995f) clip++
+            if (out.channels == 3) {
+                val bgc = FloatArray(3) { Processor.percentile(out.data[it], 0.3f) }
+                val m = bgc.average().toFloat().coerceAtLeast(1e-4f)
+                lastCast = bgc.maxOf { abs(it - m) } / m
+            }
             return Pair(med, clip.toFloat() / lum.size)
         }
         var med = 0f; var clipFrac = 0f; var iters = 0
@@ -246,7 +254,8 @@ object AutoEditor {
             val m = measure(p); med = m.first; clipFrac = m.second
             notes += "A típus-specifikus stretch túl erős/gyenge volt → biztonságos autostretch"
         }
-        notes += "Finomhangolás ($iters lépés): háttér ${"%.2f".format(med)}, kiégés ${"%.2f".format(clipFrac * 100)}%"
+        if (lastCast > 0.05f) { p = p.copy(scnr = max(p.scnr, 0.5f)); measure(p); notes += "Maradék színcast a háttérben → SCNR" }
+        notes += "Finomhangolás ($iters lépés): háttér ${"%.2f".format(med)}, kiégés ${"%.2f".format(clipFrac * 100)}%, háttér-színeltérés ${"%.0f".format(lastCast * 100)}%"
         return Result(p, a, notes)
     }
 

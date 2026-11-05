@@ -16,6 +16,7 @@ data class ProcessParams(
     val backgroundExtraction: Boolean = false,
     val backgroundDegree: Int = 2,            // 1 = sík, 2 = másodfokú
     val backgroundNeutralize: Boolean = false,
+    val neutralizeAfterStretch: Boolean = false, // háttér-semlegesítés a stretch után is (színcast ellen)
     val whiteBalanceStars: Boolean = false,
     val stretchMode: StretchMode = StretchMode.AUTO,
     val asinhStrength: Float = 100f,          // 1..1000
