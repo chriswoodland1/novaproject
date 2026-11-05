@@ -122,8 +122,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun toggleReject(uri: Uri) {
-        frames.value = frames.value.map { if (it.uri == uri) it.copy(rejected = !it.rejected, reason = if (it.rejected) "" else "kézzel kizárva") else it }
+        frames.value = frames.value.map { if (it.uri == uri) it.copy(rejected = !it.rejected, reason = if (it.rejected) "kézzel visszavéve" else "kézzel kizárva") else it }
     }
+
+    fun unrejectAll() { frames.value = frames.value.map { if (it.rejected && !it.reason.startsWith("nem olvasható")) it.copy(rejected = false, reason = "kézzel visszavéve") else it } }
 
     fun clearFrames() { frames.value = emptyList(); stackState.value = StackUiState() }
 

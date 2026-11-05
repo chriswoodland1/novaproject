@@ -112,19 +112,26 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                     TextButton(onClick = { pickSingle.launch(MIMES) }) { Text("Egyetlen kész kép megnyitása") }
                 }
             }
-            items(frames, key = { it.uri.toString() }) { f -> FrameCell(f) { vm.toggleReject(f.uri) } }
+            items(frames, key = { it.uri.toString() }) { f -> FrameCell(f) {
+                if (f.reason.isNotEmpty() && f.reason != "elemzés…") android.widget.Toast.makeText(ctx, "${f.name}: ${f.reason}", android.widget.Toast.LENGTH_SHORT).show()
+                vm.toggleReject(f.uri)
+            } }
             if (frames.isNotEmpty()) {
                 item(span = { GridItemSpan(4) }) { FwhmChart(frames) }
                 item(span = { GridItemSpan(4) }) {
                     Column(Modifier.padding(top = 10.dp)) {
-                        Text("Felirat: FWHM px · piros keret = kizárt (automatikusan vagy érintésre) · érintés a visszavételhez",
+                        Text("Felirat: FWHM px · piros keret = kizárt (automatikusan vagy érintésre) · érintés a visszavételhez (és az ok megjelenik)",
                             style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                        val reasons = frames.filter { it.rejected }.groupBy { it.reason.substringBefore(" (") }.map { (k, v) -> "$k: ${v.size}" }
+                        if (reasons.isNotEmpty()) Text("Kizárás okai – " + reasons.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = cs.error, modifier = Modifier.padding(top = 4.dp))
+                        if (frames.any { it.reason.startsWith("küszöb lazítva") }) Text("A minőségi küszöbök a sorozat több mint felét kizárták volna, ezért csak az olvashatatlan kockák maradtak ki.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                             OutlinedButton(onClick = { showFolder = true }, enabled = !st.running && !st.analyzing) { Text("Mappa…") }
                             OutlinedButton(onClick = { pickReplace.launch(MIMES) }, enabled = !st.running && !st.analyzing) { Text("Új lista…") }
                             OutlinedButton(onClick = { pickLights.launch(MIMES) }, enabled = !st.running && !st.analyzing) { Text("+ Kockák") }
                             OutlinedButton(onClick = { showSeestar = true }, enabled = !st.running && !st.analyzing) { Text("+ Seestar") }
                             OutlinedButton(onClick = { showPipeline = true }, enabled = !st.running && !st.analyzing) { Text("Pipeline") }
+                            if (rejected > 0) TextButton(onClick = { vm.unrejectAll() }, enabled = !st.running) { Text("Mind vissza") }
                             TextButton(onClick = { vm.clearFrames() }, enabled = !st.running) { Text("Lista törlése") }
                         }
                     }

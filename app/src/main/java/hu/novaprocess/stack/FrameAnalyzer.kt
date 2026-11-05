@@ -123,7 +123,8 @@ object FrameAnalyzer {
             if (mx > best) { best = mx; bestMean = mean }
         }
         // egy csík: a legjobb irányban a csúcs sokszorosa az átlagnak, és legalább a kép ~40%-át átéri
-        return best > 12f * bestMean.coerceAtLeast(1f) && best > minOf(w, h) * 0.4f
+        // egyetlen domináns vonal: a csúcs a vonal-jelölt pixelek jelentős része, sokszorosa az átlagnak, és átéri a kép ~40%-át
+        return best > 12f * bestMean.coerceAtLeast(1f) && best > minOf(w, h) * 0.4f && best > total * 0.3f
     }
 
     /** 2×2 Bayer-blokk → 1 RGB pixel (fél felbontás), elemzéshez és bélyegképhez elég. */
@@ -145,22 +146,34 @@ object FrameAnalyzer {
         return out
     }
 
-    /** Automatikus kizárás a kockák mediánjához képest. */
-    fun autoReject(frames: List<FrameInfo>, fwhmFactor: Float = 1.5f, minStarsFactor: Float = 0.4f, maxEcc: Float = 0.75f): List<FrameInfo> {
-        val valid = frames.filter { it.stars > 0 }
-        if (valid.size < 3) return frames
+    /**
+     * Automatikus kizárás a kockák mediánjához képest. Biztonsági szabály: ha a küszöbök a kockák
+     * több mint felét kizárnák, a sorozat jellege más (pl. kevés csillag, széles köd) – ilyenkor csak
+     * az olvashatatlan kockák maradnak ki, és a kizárási ok jelzi, hogy a küszöböket lazítottuk.
+     */
+    fun autoReject(frames: List<FrameInfo>, fwhmFactor: Float = 1.6f, minStarsFactor: Float = 0.35f, maxEcc: Float = 0.85f): List<FrameInfo> {
+        val manual = frames.filter { it.reason == "kézzel kizárva" }.map { it.uri }.toSet()
+        val readable = frames.filter { !it.reason.startsWith("nem olvasható") && it.reason != "elemzés…" }
+        val valid = readable.filter { it.stars > 0 }
+        if (valid.size < 3) return frames.map { f -> if (f.uri in manual) f else if (f.reason.startsWith("nem olvasható")) f.copy(rejected = true) else f.copy(rejected = false, reason = "") }
         val medFwhm = valid.map { it.fwhm }.sorted()[valid.size / 2]
         val medStars = valid.map { it.stars }.sorted()[valid.size / 2]
-        return frames.map { f ->
-            val reason = when {
-                f.stars == 0 -> "nincs csillag"
-                f.trail -> "csík (műhold/repülő)"
-                f.fwhm > medFwhm * fwhmFactor -> "életlen (FWHM ${"%.1f".format(f.fwhm)})"
-                f.stars < medStars * minStarsFactor -> "kevés csillag / felhő"
-                f.eccentricity > maxEcc -> "elhúzott csillagok"
-                else -> ""
-            }
-            f.copy(rejected = reason.isNotEmpty(), reason = reason)
+        fun reasonOf(f: FrameInfo): String = when {
+            f.reason.startsWith("nem olvasható") -> f.reason
+            f.stars == 0 -> "nincs csillag"
+            f.trail -> "csík (műhold/repülő)"
+            f.fwhm > medFwhm * fwhmFactor -> "életlen (FWHM ${"%.1f".format(f.fwhm)} vs medián ${"%.1f".format(medFwhm)})"
+            f.stars < medStars * minStarsFactor -> "kevés csillag (${f.stars} vs medián $medStars) – felhő?"
+            f.eccentricity > maxEcc && f.stars >= 8 -> "elhúzott csillagok (${"%.0f".format(f.eccentricity * 100)}%)"
+            else -> ""
         }
+        var out = frames.map { f -> if (f.uri in manual) f else { val r = reasonOf(f); f.copy(rejected = r.isNotEmpty(), reason = r) } }
+        val autoRejected = out.count { it.rejected && it.uri !in manual && !it.reason.startsWith("nem olvasható") }
+        if (autoRejected > readable.size / 2) {
+            // túl szigorú a sorozatra → csak az olvashatatlanokat zárjuk ki
+            out = frames.map { f -> if (f.uri in manual) f else if (f.reason.startsWith("nem olvasható")) f.copy(rejected = true) else f.copy(rejected = false, reason = "küszöb lazítva: ${reasonOf(f).ifEmpty { "ok" }}") }
+        }
+        return out
     }
+
 }
