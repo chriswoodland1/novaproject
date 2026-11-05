@@ -15,7 +15,7 @@ data class SmbEntry(val name: String, val path: String, val isDir: Boolean, val 
 
 /**
  * A Seestar a saját Wi-Fi-jén (vagy állomás módban a házi hálózaton) SMB-n megosztja a
- * felvételeket ("EMMC Images" megosztás, MyWorks/<objektum>/..._sub/*.fit). Vendég hozzáférés.
+ * felvételeket ("EMMC Images" megosztás, MyWorks/objektum/..._sub mappa FITS fájljai). Vendég hozzáférés.
  * Alapértelmezett cím: seestar.local; a Seestar saját hotspotján általában 10.0.0.1.
  */
 object SeestarSmb {
