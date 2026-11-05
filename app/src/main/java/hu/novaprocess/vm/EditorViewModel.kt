@@ -86,7 +86,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     private var stackJob: Job? = null
 
     // ---------------------------------------------------------------- kockák hozzáadása + elemzés
-    fun addFrames(uris: List<Uri>) {
+    fun addFrames(uris: List<Uri>, replace: Boolean = false) {
+        if (replace) { frames.value = emptyList(); stackState.value = StackUiState() }
         val existing = frames.value.map { it.uri }.toSet()
         val new = uris.filter { it !in existing }
         if (new.isEmpty()) return

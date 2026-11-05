@@ -66,10 +66,17 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
     var showPlanetary by remember { mutableStateOf(false) }
     var showPipeline by remember { mutableStateOf(false) }
 
+    // Üres listánál vagy egy már lezárt stack után a kiválasztás LECSERÉLI a listát; a „+ Kockák” hozzáfűz.
     val pickLights = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) {
             uris.forEach { runCatching { ctx.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
-            vm.addFrames(uris)
+            vm.addFrames(uris, replace = vm.frames.value.isEmpty() || vm.stackState.value.log.isNotEmpty())
+        }
+    }
+    val pickReplace = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
+            uris.forEach { runCatching { ctx.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
+            vm.addFrames(uris, replace = true)
         }
     }
     val pickDarks = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { if (it.isNotEmpty()) vm.stackOptions.value = opts.copy(darkUris = it) }
@@ -111,6 +118,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                         Text("Felirat: FWHM px · piros keret = kizárt (automatikusan vagy érintésre) · érintés a visszavételhez",
                             style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                            OutlinedButton(onClick = { pickReplace.launch(MIMES) }, enabled = !st.running && !st.analyzing) { Text("Új lista…") }
                             OutlinedButton(onClick = { pickLights.launch(MIMES) }, enabled = !st.running && !st.analyzing) { Text("+ Kockák") }
                             OutlinedButton(onClick = { showSeestar = true }, enabled = !st.running && !st.analyzing) { Text("+ Seestar") }
                             OutlinedButton(onClick = { showPipeline = true }, enabled = !st.running && !st.analyzing) { Text("Pipeline") }
