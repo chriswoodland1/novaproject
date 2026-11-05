@@ -15,6 +15,8 @@ object ImageLoader {
         return uri.lastPathSegment ?: "kép"
     }
 
+    fun isTiff(name: String): Boolean { val n = name.lowercase(); return n.endsWith(".tif") || n.endsWith(".tiff") }
+
     fun isFits(name: String): Boolean {
         val n = name.lowercase()
         return n.endsWith(".fit") || n.endsWith(".fits") || n.endsWith(".fts")
@@ -27,6 +29,12 @@ object ImageLoader {
             cr.openInputStream(uri).use { ins ->
                 requireNotNull(ins) { "Nem nyitható: $name" }
                 return FitsReader.read(ins)
+            }
+        }
+        if (isTiff(name)) {
+            cr.openInputStream(uri).use { ins ->
+                requireNotNull(ins) { "Nem nyitható: $name" }
+                return TiffReader.read(ins)   // 16 bites lineáris adat, nincs sRGB-konverzió
             }
         }
         val opts = BitmapFactory.Options().apply { inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888 }

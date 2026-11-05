@@ -64,6 +64,8 @@ android {
     }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        resources.excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        resources.pickFirsts += "META-INF/DEPENDENCIES"
     }
 }
 
@@ -82,4 +84,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("com.google.code.gson:gson:2.11.0")
+    // Seestar SMB megosztás böngészése (EMMC Images)
+    implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
 }

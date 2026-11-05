@@ -61,6 +61,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
     val st by vm.stackState.collectAsState()
     val cs = MaterialTheme.colorScheme
     var sheet by remember { mutableStateOf<String?>(null) }
+    var showSeestar by remember { mutableStateOf(false) }
 
     val pickLights = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) {
@@ -93,6 +94,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Válaszd ki a Seestar _sub FITS kockáit vagy JPEG/PNG sorozatot.", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     Button(onClick = { pickLights.launch(MIMES) }) { Text("Kockák hozzáadása") }
+                    OutlinedButton(onClick = { showSeestar = true }) { Text("Tallózás a Seestar-on (Wi-Fi)") }
                     TextButton(onClick = { pickSingle.launch(MIMES) }) { Text("Egyetlen kész kép megnyitása") }
                 }
             }
@@ -104,6 +106,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                             style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                             OutlinedButton(onClick = { pickLights.launch(MIMES) }, enabled = !st.running && !st.analyzing) { Text("+ Kockák") }
+                            OutlinedButton(onClick = { showSeestar = true }, enabled = !st.running && !st.analyzing) { Text("+ Seestar") }
                             TextButton(onClick = { vm.clearFrames() }, enabled = !st.running) { Text("Lista törlése") }
                         }
                     }
@@ -154,6 +157,8 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
             }
         }
     }
+
+    if (showSeestar) SeestarSheet(onPicked = { vm.addFrames(it) }, onClose = { showSeestar = false })
 
     if (sheet != null) ModalBottomSheet(onDismissRequest = { sheet = null }, containerColor = cs.surface) {
         Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp).padding(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

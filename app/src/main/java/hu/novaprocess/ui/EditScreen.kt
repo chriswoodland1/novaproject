@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Compare
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.RestartAlt
@@ -169,6 +170,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     var toolIdx by remember { mutableIntStateOf(0) }
     var showOriginal by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
+    var showPresets by remember { mutableStateOf(false) }
     var showHist by remember { mutableStateOf(true) }
 
     LaunchedEffect(ui.message) { ui.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show(); vm.clearMessage() } }
@@ -205,7 +207,9 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
             // felső sáv a kép fölött
             Row(Modifier.align(Alignment.TopCenter).statusBarsPadding().fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Vissza", tint = cs.onSurface) }
-                Text(if (showOriginal) "EREDETI" else ui.sourceInfo, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                Text(if (showOriginal) "EREDETI" else ui.sourceInfo, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f).padding(horizontal = 8.dp), maxLines = 1)
+                IconButton(onClick = { showPresets = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.Bookmarks, contentDescription = "Presetek", tint = cs.onSurface) }
+                Spacer(Modifier.size(6.dp))
                 IconButton(onClick = { showExport = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.Download, contentDescription = "Export", tint = cs.onSurface) }
             }
             if (ui.processing) CircularProgressIndicator(Modifier.align(Alignment.BottomEnd).padding(12.dp).size(22.dp), color = cs.onSurfaceVariant, strokeWidth = 2.dp)
@@ -253,6 +257,52 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     }
 
     if (showExport) ExportSheet(vm, ui.exporting) { showExport = false }
+    if (showPresets) PresetSheet(vm) { showPresets = false }
+}
+
+@Composable
+private fun PresetSheet(vm: EditorViewModel, onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    val cs = MaterialTheme.colorScheme
+    var version by remember { mutableIntStateOf(0) }
+    val user = remember(version) { hu.novaprocess.process.Presets.userPresets(ctx) }
+    var newName by remember { mutableStateOf("") }
+    val saveRecipe = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) runCatching { ctx.contentResolver.openOutputStream(uri)!!.use { it.write(vm.recipeJson().toByteArray()) } }
+    }
+    val loadRecipe = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val ok = runCatching { ctx.contentResolver.openInputStream(uri)!!.bufferedReader().readText() }.getOrNull()?.let { vm.loadRecipe(it) } ?: false
+            Toast.makeText(ctx, if (ok) "Recept betöltve." else "Nem olvasható recept.", Toast.LENGTH_SHORT).show()
+            if (ok) onClose()
+        }
+    }
+    ModalBottomSheet(onDismissRequest = onClose, containerColor = cs.surface) {
+        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Presetek", style = MaterialTheme.typography.headlineMedium)
+            Text("Beépített", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                hu.novaprocess.process.Presets.builtIns.forEach { pr -> Pill(pr.name, false) { vm.applyPreset(pr.params); onClose() } }
+            }
+            if (user.isNotEmpty()) {
+                Text("Saját", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                user.forEach { pr ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text(pr.name, modifier = Modifier.weight(1f).pointerInput(pr.name) { detectTapGestures { vm.applyPreset(pr.params); onClose() } })
+                        TextButton(onClick = { hu.novaprocess.process.Presets.delete(ctx, pr.name); version++ }) { Text("Törlés", color = cs.error) }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.OutlinedTextField(value = newName, onValueChange = { newName = it }, label = { Text("Jelenlegi mentése mint…") }, singleLine = true, modifier = Modifier.weight(1f))
+                TextButton(onClick = { if (newName.isNotBlank()) { hu.novaprocess.process.Presets.save(ctx, newName.trim(), vm.params.value); newName = ""; version++ } }) { Text("Mentés") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { saveRecipe.launch("recept_${System.currentTimeMillis()}.nova.json") }) { Text("Recept exportálása (JSON)") }
+                TextButton(onClick = { loadRecipe.launch(arrayOf("application/json", "*/*")) }) { Text("Recept betöltése") }
+            }
+        }
+    }
 }
 
 @Composable

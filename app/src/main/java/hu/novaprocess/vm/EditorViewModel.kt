@@ -9,6 +9,10 @@ import androidx.lifecycle.viewModelScope
 import hu.novaprocess.image.FloatImage
 import hu.novaprocess.image.ImageLoader
 import hu.novaprocess.image.TiffWriter
+import hu.novaprocess.library.Library
+import hu.novaprocess.library.LibraryEntry
+import hu.novaprocess.process.Presets
+import java.io.File
 import hu.novaprocess.process.ProcessParams
 import hu.novaprocess.process.Processor
 import hu.novaprocess.stack.FrameAnalyzer
@@ -119,6 +123,15 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 setSource(res.image, "Stack · ${res.used} kocka · ${res.image.width}×${res.image.height}")
                 stackState.update { it.copy(running = false, log = res.log) }
+                // könyvtárba: 16 bites TIFF + miniatűr
+                launch(Dispatchers.IO) {
+                    runCatching {
+                        val thumb = Processor.process(res.image.downscale(320), ProcessParams()).toBitmap()
+                        val title = frames.value.firstOrNull()?.name?.substringBefore("_sub")?.substringBefore("-sub")?.substringBeforeLast('.') ?: "Stack"
+                        val entry = Library.saveStack(getApplication<Application>(), res.image, thumb, title, res.used, 0, ProcessParams())
+                        currentEntryId = entry.id
+                    }
+                }
             } catch (e: Exception) {
                 stackState.update { it.copy(running = false, error = e.message ?: e.toString()) }
             }
@@ -135,11 +148,47 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 val name = ImageLoader.displayName(getApplication<Application>(), uri)
                 val img = withContext(Dispatchers.IO) { ImageLoader.load(getApplication<Application>(), uri, name) }
                 setSource(img, "$name · ${img.width}×${img.height}")
+                launch(Dispatchers.IO) {
+                    runCatching {
+                        val thumb = Processor.process(img.downscale(320), ProcessParams()).toBitmap()
+                        currentEntryId = Library.saveSingle(getApplication<Application>(), uri.toString(), name, img.width, img.height, thumb, ProcessParams()).id
+                    }
+                }
             } catch (e: Exception) {
                 _ui.update { it.copy(processing = false, message = "Nem sikerült megnyitni: ${e.message}") }
             }
         }
     }
+
+    // ---------------------------------------------------------------- könyvtár
+    private var currentEntryId: String? = null
+    val libraryVersion = MutableStateFlow(0)
+
+    fun openEntry(e: LibraryEntry) {
+        viewModelScope.launch {
+            _ui.update { it.copy(processing = true, message = null) }
+            try {
+                val img = withContext(Dispatchers.IO) {
+                    if (e.sourcePath != null) hu.novaprocess.image.TiffReader.read(File(e.sourcePath).inputStream())
+                    else ImageLoader.load(getApplication<Application>(), Uri.parse(e.sourceUri!!))
+                }
+                setSource(img, "${e.title} · ${img.width}×${img.height}")
+                currentEntryId = e.id
+                runCatching { Presets.gson.fromJson(e.paramsJson, ProcessParams::class.java) }.getOrNull()?.let { p -> params.value = p; schedulePreview(immediate = true) }
+            } catch (ex: Exception) {
+                _ui.update { it.copy(processing = false, message = "Nem nyitható (törölt vagy elérhetetlen forrás): ${ex.message}") }
+            }
+        }
+    }
+
+    fun deleteEntry(id: String) { Library.delete(getApplication(), id); libraryVersion.value++ }
+
+    /** A jelenlegi receptet elmenti a könyvtár aktuális bejegyzéséhez (export után automatikus). */
+    private fun persistRecipe() { currentEntryId?.let { Library.updateParams(getApplication(), it, Presets.gson.toJson(params.value)) } }
+
+    fun applyPreset(p: ProcessParams) { commitParams { p } }
+    fun recipeJson(): String = Presets.toJson(params.value)
+    fun loadRecipe(json: String): Boolean = runCatching { applyPreset(Presets.fromJson(json)); true }.getOrDefault(false)
 
     private fun setSource(img: FloatImage, info: String) {
         source = img
@@ -231,6 +280,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                 }
+                persistRecipe()
                 _ui.update { it.copy(exporting = false, message = "Exportálva.") }
             } catch (e: Exception) {
                 _ui.update { it.copy(exporting = false, message = "Export hiba: ${e.message}") }
