@@ -48,6 +48,7 @@ data class StackUiState(
     val running: Boolean = false,
     val analyzing: Boolean = false,
     val analyzed: Int = 0,
+    val analyzeTotal: Int = 0,
     val progress: StackProgress? = null,
     val log: List<String> = emptyList(),
     val error: String? = null
@@ -95,22 +96,27 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         val existing = frames.value.map { it.uri }.toSet()
         val new = uris.filter { it !in existing }
         if (new.isEmpty()) return
+        val app = getApplication<Application>()
+        // azonnal megjelenő helyőrzők, hogy látszódjon: megérkeztek a fájlok
+        val placeholders = new.map { u -> FrameInfo(u, runCatching { ImageLoader.displayName(app, u) }.getOrDefault("kép"), 0f, 0, 0f, 0f, null, false, "elemzés…") }
+        frames.value = frames.value + placeholders
         viewModelScope.launch {
-            stackState.update { it.copy(analyzing = true, analyzed = 0, error = null) }
+            stackState.update { it.copy(analyzing = true, analyzed = 0, analyzeTotal = new.size, error = null) }
             val sem = Semaphore(1)
-            val infos = withContext(Dispatchers.Default) {
+            withContext(Dispatchers.Default) {
                 new.map { uri ->
                     async {
                         sem.withPermit {
-                            val info = try { FrameAnalyzer.analyze(getApplication<Application>(), uri) }
-                            catch (e: Throwable) { FrameInfo(uri, ImageLoader.displayName(getApplication<Application>(), uri), 0f, 0, 0f, 0f, null, true, "nem olvasható") }
+                            val info = try { FrameAnalyzer.analyze(app, uri) }
+                            catch (e: Throwable) { FrameInfo(uri, ImageLoader.displayName(app, uri), 0f, 0, 0f, 0f, null, true, "nem olvasható: ${e.message?.take(40) ?: e.javaClass.simpleName}") }
+                            // helyőrző cseréje az eredményre, azonnal
+                            frames.update { list -> list.map { if (it.uri == uri) info else it } }
                             stackState.update { it.copy(analyzed = it.analyzed + 1) }
-                            info
                         }
                     }
                 }.awaitAll()
             }
-            frames.value = FrameAnalyzer.autoReject(frames.value + infos)
+            frames.value = FrameAnalyzer.autoReject(frames.value)
             stackState.update { it.copy(analyzing = false) }
         }
     }

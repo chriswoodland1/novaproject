@@ -36,9 +36,21 @@ object FrameAnalyzer {
         val name = ImageLoader.displayName(context, uri)
         var meta: ImageLoader.Meta? = null
         var scaleDown = 1f
-        val small = ImageLoader.loadWithMeta(context, uri, name).let { (full, m) ->
+        val small: FloatImage = if (ImageLoader.isFits(name)) {
+            // gyors út: nyers Bayer-sík → szuperpixel (2×2 → 1 RGB) → lekicsinyítés; nincs teljes debayer
+            context.contentResolver.openInputStream(uri).use { ins ->
+                requireNotNull(ins) { "Nem nyitható: $name" }
+                val (img, cards, raw) = hu.novaprocess.image.FitsReader.readRawOrImage(ins)
+                meta = ImageLoader.metaOf(cards)
+                if (raw != null) {
+                    val (w, h, plane) = raw
+                    scaleDown = maxOf(w, h).toFloat() / analysisSide
+                    superpixel(plane, w, h, cards["BAYERPAT"]!!.uppercase()).downscale(analysisSide)
+                } else { scaleDown = maxOf(img!!.width, img.height).toFloat() / analysisSide; img.downscale(analysisSide) }
+            }
+        } else ImageLoader.loadWithMeta(context, uri, name).let { (full, m) ->
             meta = m; scaleDown = maxOf(full.width, full.height).toFloat() / analysisSide
-            full.downscale(analysisSide)   // a teljes kép itt elengedhető
+            full.downscale(analysisSide)
         }
         val mono = small.toMono()
         val stars = StarDetector.detect(mono, maxStars = 150, sigmaK = 6f)
@@ -112,6 +124,25 @@ object FrameAnalyzer {
         }
         // egy csík: a legjobb irányban a csúcs sokszorosa az átlagnak, és legalább a kép ~40%-át átéri
         return best > 12f * bestMean.coerceAtLeast(1f) && best > minOf(w, h) * 0.4f
+    }
+
+    /** 2×2 Bayer-blokk → 1 RGB pixel (fél felbontás), elemzéshez és bélyegképhez elég. */
+    fun superpixel(plane: FloatArray, w: Int, h: Int, pattern: String): FloatImage {
+        val w2 = w / 2; val h2 = h / 2
+        val out = FloatImage(w2, h2, 3)
+        val idx = IntArray(4) { when (pattern[it]) { 'R' -> 0; 'G' -> 1; else -> 2 } }
+        val r = out.data[0]; val g = out.data[1]; val b = out.data[2]
+        hu.novaprocess.image.Par.rows(h2) { y0, y1 ->
+            for (y in y0 until y1) for (x in 0 until w2) {
+                val i = (2 * y) * w + 2 * x
+                val v = floatArrayOf(plane[i], plane[i + 1], plane[i + w], plane[i + w + 1])
+                var rr = 0f; var gg = 0f; var bb = 0f; var ng = 0
+                for (k in 0 until 4) when (idx[k]) { 0 -> rr = v[k]; 1 -> { gg += v[k]; ng++ }; else -> bb = v[k] }
+                val o = y * w2 + x
+                r[o] = rr; g[o] = if (ng > 0) gg / ng else 0f; b[o] = bb
+            }
+        }
+        return out
     }
 
     /** Automatikus kizárás a kockák mediánjához képest. */

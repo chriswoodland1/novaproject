@@ -150,8 +150,8 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
         // alsó sáv: becslés + Stack gomb (a lebegő nav fölött)
         if (frames.isNotEmpty()) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(cs.background).padding(start = 20.dp, end = 20.dp, bottom = 96.dp, top = 8.dp)) {
             if (st.analyzing) {
-                LinearProgressIndicator(progress = { st.analyzed.toFloat() / (frames.size + (st.analyzed - frames.size).coerceAtLeast(0)).coerceAtLeast(1) }, modifier = Modifier.fillMaxWidth())
-                Text("Kockák elemzése… ${st.analyzed}", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+                LinearProgressIndicator(progress = { if (st.analyzeTotal > 0) st.analyzed.toFloat() / st.analyzeTotal else 0f }, modifier = Modifier.fillMaxWidth())
+                Text("Kockák elemzése… ${st.analyzed} / ${st.analyzeTotal} (FWHM, csillagok, csík)", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
             } else if (st.running) {
                 val p = st.progress
                 LinearProgressIndicator(progress = { if (p != null && p.total > 0) p.current.toFloat() / p.total else 0f }, modifier = Modifier.fillMaxWidth())
@@ -269,8 +269,9 @@ private fun FrameCell(f: FrameInfo, onToggle: () -> Unit) {
         Modifier.aspectRatio(1f).background(Dk.Panel).let { if (f.rejected) it.border(2.dp, cs.error) else it }.clickable(onClick = onToggle)
     ) {
         f.thumb?.let { Image(it.asImageBitmap(), contentDescription = f.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+        if (f.thumb == null && f.reason == "elemzés…") androidx.compose.material3.CircularProgressIndicator(Modifier.align(Alignment.Center).padding(12.dp), strokeWidth = 2.dp, color = cs.onSurfaceVariant)
         Text(
-            if (f.rejected && f.reason.isNotEmpty() && f.fwhm == 0f) "✕" else if (f.fwhm > 0f) "%.1f".format(f.fwhm) else "–",
+            if (f.reason == "elemzés…") "…" else if (f.rejected && f.reason.isNotEmpty() && f.fwhm == 0f) "✕" else if (f.fwhm > 0f) "%.1f".format(f.fwhm) else "–",
             style = MaterialTheme.typography.labelSmall, color = if (f.rejected) cs.error else cs.onSurface,
             modifier = Modifier.align(Alignment.BottomStart).padding(5.dp)
         )
