@@ -6,6 +6,12 @@ import java.io.PrintWriter
 import java.io.StringWriter
 
 class NovaApp : Application() {
+    /**
+     * A feldolgozó állapot (kockák, stack, szerkesztés) az ALKALMAZÁS élettartamához kötve, nem a képernyőhöz:
+     * ha az Android háttérben lebontja az Activity-t, a futó stack és a megnyitott kép megmarad.
+     */
+    val vm: hu.novaprocess.vm.EditorViewModel by lazy { hu.novaprocess.vm.EditorViewModel(this) }
+
     override fun onCreate() {
         super.onCreate()
         hu.novaprocess.image.FitsReader.bayerOverride = getSharedPreferences("nova_ui", MODE_PRIVATE).getString("fits_bayer", null)?.takeIf { it.length == 4 }

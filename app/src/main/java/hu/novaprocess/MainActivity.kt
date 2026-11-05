@@ -4,7 +4,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -45,7 +44,7 @@ import hu.novaprocess.ui.theme.NovaTheme
 import hu.novaprocess.vm.EditorViewModel
 
 class MainActivity : ComponentActivity() {
-    private val vm: EditorViewModel by viewModels()
+    private val vm: EditorViewModel get() = (application as NovaApp).vm
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()

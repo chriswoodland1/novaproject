@@ -54,6 +54,19 @@ fun SettingsScreen(vm: EditorViewModel) {
         HorizontalDivider(color = cs.outline)
 
         RowItem("Vízjel exportnál", when (wm.mode) { hu.novaprocess.process.WmMode.OFF -> "ki"; hu.novaprocess.process.WmMode.TEXT -> "szöveg"; hu.novaprocess.process.WmMode.IMAGE -> "logó" }) { showWm = true }
+        val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+        var ignoring by remember { mutableStateOf(pm.isIgnoringBatteryOptimizations(ctx.packageName)) }
+        Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Háttérben futás", style = MaterialTheme.typography.titleMedium)
+                Text(if (ignoring) "Akkumulátor-optimalizálás kikapcsolva – a stack háttérben is végigfut." else "Kapcsold ki az akkumulátor-optimalizálást az apphoz, különben a rendszer háttérben megszakíthatja a hosszú stacket.", style = MaterialTheme.typography.bodySmall, color = if (ignoring) cs.onSurfaceVariant else cs.error)
+            }
+            if (!ignoring) TextButton(onClick = {
+                runCatching { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:${ctx.packageName}"))) }
+                ignoring = pm.isIgnoringBatteryOptimizations(ctx.packageName)
+            }) { Text("Beállítás") }
+        }
+        HorizontalDivider(color = cs.outline)
         RowItem("Verzió", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Indításkor legfeljebb 6 óránként ellenőrzi a GitHub Releases-t; új verziót engedély után tölt le és telepít.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
