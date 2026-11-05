@@ -64,6 +64,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
     var sheet by remember { mutableStateOf<String?>(null) }
     var showSeestar by remember { mutableStateOf(false) }
     var showPlanetary by remember { mutableStateOf(false) }
+    var showPipeline by remember { mutableStateOf(false) }
 
     val pickLights = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) {
@@ -98,6 +99,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                     Button(onClick = { pickLights.launch(MIMES) }) { Text("Kockák hozzáadása") }
                     OutlinedButton(onClick = { showSeestar = true }) { Text("Tallózás a Seestar-on (Wi-Fi)") }
                     OutlinedButton(onClick = { showPlanetary = true }) { Text("Bolygó / Hold videóból") }
+                    OutlinedButton(onClick = { showPipeline = true }) { Text("Pipeline · több objektum egy gombbal") }
                     TextButton(onClick = { pickSingle.launch(MIMES) }) { Text("Egyetlen kész kép megnyitása") }
                 }
             }
@@ -111,6 +113,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                             OutlinedButton(onClick = { pickLights.launch(MIMES) }, enabled = !st.running && !st.analyzing) { Text("+ Kockák") }
                             OutlinedButton(onClick = { showSeestar = true }, enabled = !st.running && !st.analyzing) { Text("+ Seestar") }
+                            OutlinedButton(onClick = { showPipeline = true }, enabled = !st.running && !st.analyzing) { Text("Pipeline") }
                             TextButton(onClick = { vm.clearFrames() }, enabled = !st.running) { Text("Lista törlése") }
                         }
                     }
@@ -162,6 +165,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
         }
     }
 
+    if (showPipeline) PipelineSheet(vm) { showPipeline = false }
     if (showPlanetary) PlanetarySheet(vm, onDone = onOpenEditor, onClose = { showPlanetary = false })
     if (showSeestar) SeestarSheet(onPicked = { vm.addFrames(it) }, onClose = { showSeestar = false })
 

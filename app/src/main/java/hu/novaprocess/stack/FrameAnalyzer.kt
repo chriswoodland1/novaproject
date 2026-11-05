@@ -22,7 +22,8 @@ data class FrameInfo(
     val reason: String = "",
     val objectName: String? = null,
     val exposure: Float? = null,
-    val dateObs: String? = null
+    val dateObs: String? = null,
+    val trail: Boolean = false   // műhold-/repülőcsík
 )
 
 /**
@@ -67,12 +68,50 @@ object FrameAnalyzer {
         val fwhm = if (n > 0) fwhmSum / n * (if (scaleDown > 1f) scaleDown else 1f) else 0f
         val ecc = if (n > 0) eccSum / n else 0f
 
+        val trail = detectTrail(a, w, h, bg)
+
         val thumb = try {
             val t = small.downscale(thumbSide)
             Processor.process(t, ProcessParams()).toBitmap()
         } catch (e: Exception) { null }
 
-        return FrameInfo(uri, name, fwhm, stars.size, bg, ecc, thumb, objectName = meta?.objectName, exposure = meta?.exposure, dateObs = meta?.dateObs)
+        return FrameInfo(uri, name, fwhm, stars.size, bg, ecc, thumb, objectName = meta?.objectName, exposure = meta?.exposure, dateObs = meta?.dateObs, trail = trail)
+    }
+
+    /**
+     * Csíkfelismerés: a háttér fölötti maszkból (csillagok kivágva a morfológiai nyitással) 36 irányban
+     * vetületet képzünk; egy hosszú egyenes csík egyetlen irányban kiugró, keskeny csúcsot ad.
+     */
+    fun detectTrail(a: FloatArray, w: Int, h: Int, bg: Float): Boolean {
+        val noise = (Processor.mad(a, bg) * 1.4826f).coerceAtLeast(1e-6f)
+        val thr = bg + 3f * noise
+        // maszk: fényes pixelek, kivéve a kompakt (csillag) foltokat → 2 px-es nyitás után maradó vonalas struktúrák
+        val mask = BooleanArray(w * h) { a[it] > thr }
+        val opened = BooleanArray(w * h)
+        for (y in 1 until h - 1) for (x in 1 until w - 1) {
+            val i = y * w + x
+            if (!mask[i]) continue
+            // vízszintes VAGY függőleges VAGY átlós 5 hosszú futás → vonal-jelölt
+            var runH = 0; var runV = 0; var runD1 = 0; var runD2 = 0
+            for (d in -2..2) { if (mask[i + d]) runH++; if (mask[i + d * w]) runV++; if (x + d in 0 until w && y + d in 0 until h && mask[(y + d) * w + x + d]) runD1++; if (x - d in 0 until w && y + d in 0 until h && mask[(y + d) * w + x - d]) runD2++ }
+            opened[i] = runH == 5 || runV == 5 || runD1 == 5 || runD2 == 5
+        }
+        val total = opened.count { it }
+        if (total < maxOf(w, h) / 2) return false
+        // vetületek: Hough-szerű, 36 irány, bin = 2 px
+        val diag = Math.hypot(w.toDouble(), h.toDouble()).toInt()
+        val bins = diag / 2 + 2
+        var best = 0; var bestMean = 1f
+        for (t in 0 until 36) {
+            val th = Math.PI * t / 36.0; val ct = Math.cos(th); val st = Math.sin(th)
+            val acc = IntArray(bins * 2)
+            var i = 0
+            for (y in 0 until h) for (x in 0 until w) { if (opened[i]) { val r = (x * ct + y * st).toInt() / 2 + bins; if (r in acc.indices) acc[r]++ }; i++ }
+            val mx = acc.max(); val mean = total.toFloat() / bins
+            if (mx > best) { best = mx; bestMean = mean }
+        }
+        // egy csík: a legjobb irányban a csúcs sokszorosa az átlagnak, és legalább a kép ~40%-át átéri
+        return best > 12f * bestMean.coerceAtLeast(1f) && best > minOf(w, h) * 0.4f
     }
 
     /** Automatikus kizárás a kockák mediánjához képest. */
@@ -84,6 +123,7 @@ object FrameAnalyzer {
         return frames.map { f ->
             val reason = when {
                 f.stars == 0 -> "nincs csillag"
+                f.trail -> "csík (műhold/repülő)"
                 f.fwhm > medFwhm * fwhmFactor -> "életlen (FWHM ${"%.1f".format(f.fwhm)})"
                 f.stars < medStars * minStarsFactor -> "kevés csillag / felhő"
                 f.eccentricity > maxEcc -> "elhúzott csillagok"

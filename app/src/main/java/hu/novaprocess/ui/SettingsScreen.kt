@@ -61,6 +61,12 @@ fun SettingsScreen(vm: EditorViewModel) {
         }
         HorizontalDivider(color = cs.outline)
 
+        var astroKey by remember { mutableStateOf(hu.novaprocess.solve.PlateSolver.apiKey(ctx)) }
+        Text("Plate solving (astrometry.net)", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
+        Text("Ingyenes API-kulcs: nova.astrometry.net → bejelentkezés → Profile → API key. A kép lekicsinyítve kerül feltöltésre, az eredmény nem publikus.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        OutlinedTextField(value = astroKey, onValueChange = { astroKey = it }, label = { Text("API-kulcs") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+        Button(onClick = { hu.novaprocess.solve.PlateSolver.setApiKey(ctx, astroKey) }, modifier = Modifier.padding(top = 8.dp)) { Text("Mentés") }
+
         Text("Frissítési forrás", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
         OutlinedTextField(value = repo, onValueChange = { repo = it }, label = { Text("GitHub repo (tulajdonos/név)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Button(onClick = { UpdateManager.setRepo(ctx, repo) }, modifier = Modifier.padding(top = 8.dp)) { Text("Mentés") }

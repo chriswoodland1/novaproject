@@ -20,7 +20,7 @@ object Processor {
     fun process(src: FloatImage, p: ProcessParams): FloatImage {
         var img = geometry(src, p)
         // --- lineáris lépések ---
-        if (p.backgroundExtraction) img = backgroundExtraction(img, p.backgroundDegree)
+        if (p.backgroundExtraction) img = if (p.backgroundDegree >= 3) backgroundRbf(img, p.bgSamples, p.bgSmooth) else backgroundExtraction(img, p.backgroundDegree)
         // előbb a csatorna-erősítés (fehéregyensúly), utána az eltolás (háttér-semlegesítés) – így a háttér semleges marad a stretchig
         if (p.whiteBalanceStars) img = whiteBalanceOnStars(img)
         if (p.backgroundNeutralize) img = neutralizeBackground(img)
@@ -320,6 +320,89 @@ object Processor {
             }
         }
         return out
+    }
+
+    /**
+     * GraXpert-szerű háttér: mintapontokban (kézi vagy automatikus rács, a fényes területek kihagyásával)
+     * mért háttérértékekre gaussi RBF-et illesztünk (regularizálva), és ezt vonjuk ki.
+     */
+    fun backgroundRbf(src: FloatImage, samplesNorm: List<Float>, smooth: Float): FloatImage {
+        val w = src.width; val h = src.height
+        val lum = src.toMono().data[0]
+        val med = median(lum); val madv = mad(lum, med) * 1.4826f
+        // mintapontok képkoordinátában
+        val pts = ArrayList<Pair<Int, Int>>()
+        if (samplesNorm.size >= 6) {
+            var i = 0; while (i + 1 < samplesNorm.size) { pts.add(Pair((samplesNorm[i] * (w - 1)).toInt().coerceIn(0, w - 1), (samplesNorm[i + 1] * (h - 1)).toInt().coerceIn(0, h - 1))); i += 2 }
+        } else {
+            val g = 9
+            for (gy in 0 until g) for (gx in 0 until g) {
+                val x = ((gx + 0.5f) * w / g).toInt(); val y = ((gy + 0.5f) * h / g).toInt()
+                // kihagyjuk a fényes (objektum/csillag) cellákat
+                val v = boxMedian(lum, w, h, x, y, 6)
+                if (v < med + 2.5f * madv) pts.add(Pair(x, y))
+            }
+            if (pts.size < 6) return src
+        }
+        val n = pts.size
+        val box = (minOf(w, h) / 60).coerceIn(3, 12)
+        val eps = (1.2f / maxOf(w, h)) * (1f + smooth * 3f)       // RBF szélesség (normalizált térben)
+        val lambda = 1e-3f + smooth * 1e-2f                          // regularizáció
+        val px = FloatArray(n) { pts[it].first.toFloat() / w }; val py = FloatArray(n) { pts[it].second.toFloat() / h }
+        // Gram-mátrix (azonos minden csatornára)
+        val A = Array(n) { DoubleArray(n) }
+        for (i in 0 until n) for (j in 0 until n) { val dx = px[i] - px[j]; val dy = py[i] - py[j]; A[i][j] = Math.exp(-((dx * dx + dy * dy) / (2.0 * eps * eps)).toDouble() * 50.0) + if (i == j) lambda.toDouble() else 0.0 }
+        val lu = luDecompose(A) ?: return src
+        for (c in 0 until src.channels) {
+            val a = src.data[c]
+            val b = DoubleArray(n) { boxMedian(a, w, h, pts[it].first, pts[it].second, box).toDouble() }
+            val coef = luSolve(lu, b)
+            val cmed = median(a)
+            // háttérfelület kiértékelése ritkított rácson, majd bilineáris felskálázás (sebesség)
+            val gw = 64; val gh = (64 * h / w).coerceAtLeast(8)
+            val grid = FloatArray(gw * gh)
+            for (gy in 0 until gh) for (gx in 0 until gw) {
+                val x = (gx + 0.5f) / gw; val y = (gy + 0.5f) / gh
+                var v = 0.0
+                for (k in 0 until n) { val dx = x - px[k]; val dy = y - py[k]; v += coef[k] * Math.exp(-((dx * dx + dy * dy) / (2.0 * eps * eps)).toDouble() * 50.0) }
+                grid[gy * gw + gx] = v.toFloat()
+            }
+            hu.novaprocess.image.Par.rows(h) { y0, y1 ->
+                for (y in y0 until y1) {
+                    val fy = ((y + 0.5f) / h * gh - 0.5f).coerceIn(0f, (gh - 1).toFloat()); val iy = fy.toInt().coerceAtMost(gh - 2); val ty = fy - iy
+                    for (x in 0 until w) {
+                        val fx = ((x + 0.5f) / w * gw - 0.5f).coerceIn(0f, (gw - 1).toFloat()); val ix = fx.toInt().coerceAtMost(gw - 2); val tx = fx - ix
+                        val bg = (grid[iy * gw + ix] * (1 - tx) + grid[iy * gw + ix + 1] * tx) * (1 - ty) + (grid[(iy + 1) * gw + ix] * (1 - tx) + grid[(iy + 1) * gw + ix + 1] * tx) * ty
+                        val i = y * w + x
+                        a[i] = (a[i] - bg + cmed).coerceAtLeast(0f)
+                    }
+                }
+            }
+        }
+        return src
+    }
+
+    private fun boxMedian(a: FloatArray, w: Int, h: Int, cx: Int, cy: Int, r: Int): Float {
+        val list = ArrayList<Float>((2 * r + 1) * (2 * r + 1))
+        for (y in (cy - r).coerceAtLeast(0)..(cy + r).coerceAtMost(h - 1)) for (x in (cx - r).coerceAtLeast(0)..(cx + r).coerceAtMost(w - 1)) list.add(a[y * w + x])
+        list.sort(); return list[list.size / 2]
+    }
+
+    private fun luDecompose(A: Array<DoubleArray>): Pair<Array<DoubleArray>, IntArray>? {
+        val n = A.size; val lu = Array(n) { A[it].copyOf() }; val piv = IntArray(n) { it }
+        for (k in 0 until n) {
+            var p = k; for (i in k + 1 until n) if (abs(lu[i][k]) > abs(lu[p][k])) p = i
+            if (abs(lu[p][k]) < 1e-12) return null
+            if (p != k) { val t = lu[p]; lu[p] = lu[k]; lu[k] = t; val tp = piv[p]; piv[p] = piv[k]; piv[k] = tp }
+            for (i in k + 1 until n) { lu[i][k] /= lu[k][k]; for (j in k + 1 until n) lu[i][j] -= lu[i][k] * lu[k][j] }
+        }
+        return Pair(lu, piv)
+    }
+    private fun luSolve(d: Pair<Array<DoubleArray>, IntArray>, b: DoubleArray): DoubleArray {
+        val (lu, piv) = d; val n = b.size; val x = DoubleArray(n) { b[piv[it]] }
+        for (i in 0 until n) for (j in 0 until i) x[i] -= lu[i][j] * x[j]
+        for (i in n - 1 downTo 0) { for (j in i + 1 until n) x[i] -= lu[i][j] * x[j]; x[i] /= lu[i][i] }
+        return x
     }
 
     /** Legkisebb négyzetes illesztés normálegyenlettel (Gauss-elimináció). */

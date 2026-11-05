@@ -117,38 +117,43 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     fun clearFrames() { frames.value = emptyList(); stackState.value = StackUiState() }
 
     // ---------------------------------------------------------------- stack
+    /** A stack magja (pipeline is ezt hívja). Visszaadja az eredményt; a forrást beállítja. */
+    private suspend fun stackCore(uris: List<Uri>, progress: (StackProgress) -> Unit): hu.novaprocess.stack.StackResult {
+        val o = stackOptions.value
+        val heapMb = hu.novaprocess.NovaApp.maxHeapMb()
+        val wantFull = o.drizzle == 1 && (o.resolution == hu.novaprocess.stack.Resolution.FULL || (o.resolution == hu.novaprocess.stack.Resolution.AUTO && heapMb >= hu.novaprocess.stack.TiledStacker.MIN_HEAP_MB))
+        val res = if (wantFull) {
+            try { hu.novaprocess.stack.TiledStacker.stack(getApplication<Application>(), uris, o, progress) }
+            catch (e: OutOfMemoryError) {
+                System.gc()
+                stackState.update { it.copy(log = it.log + "Teljes felbontás nem fért a memóriába – újra 2×2 binninggel") }
+                Stacker.stack(getApplication<Application>(), uris, o.copy(binning = 2), progress)
+            }
+        } else Stacker.stack(getApplication<Application>(), uris, o.copy(binning = if (o.resolution == hu.novaprocess.stack.Resolution.BIN2) 2 else o.binning), progress)
+        setSource(res.image, "Stack · ${res.used} kocka · ${res.image.width}×${res.image.height}")
+        captionFromFrames(res.used)
+        lastFrameCount = res.used
+        solve.value = SolveState()
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val thumb = Processor.process(res.image.downscale(320), ProcessParams()).toBitmap()
+                val cap = caption.value
+                val entry = Library.saveStack(getApplication<Application>(), res.image, thumb, cap.title, res.used, (res.used * cap.exposure).toInt(), ProcessParams())
+                currentEntryId = entry.id
+                libraryVersion.value++
+            }
+        }
+        return res
+    }
+
     fun startStack() {
         val uris = frames.value.filter { !it.rejected }.map { it.uri }
         if (uris.isEmpty() || stackState.value.running) return
         stackJob = viewModelScope.launch {
             stackState.update { it.copy(running = true, error = null, log = emptyList()) }
             try {
-                val o = stackOptions.value
-                val heapMb = hu.novaprocess.NovaApp.maxHeapMb()
-                val wantFull = o.drizzle == 1 && (o.resolution == hu.novaprocess.stack.Resolution.FULL || (o.resolution == hu.novaprocess.stack.Resolution.AUTO && heapMb >= hu.novaprocess.stack.TiledStacker.MIN_HEAP_MB))
-                val progress: (StackProgress) -> Unit = { p -> stackState.update { it.copy(progress = p) } }
-                val res = if (wantFull) {
-                    try { hu.novaprocess.stack.TiledStacker.stack(getApplication<Application>(), uris, o, progress) }
-                    catch (e: OutOfMemoryError) {
-                        System.gc()
-                        stackState.update { it.copy(log = it.log + "Teljes felbontás nem fért a memóriába – újra 2×2 binninggel") }
-                        Stacker.stack(getApplication<Application>(), uris, o.copy(binning = 2), progress)
-                    }
-                } else Stacker.stack(getApplication<Application>(), uris, o.copy(binning = if (o.resolution == hu.novaprocess.stack.Resolution.BIN2) 2 else o.binning), progress)
-                setSource(res.image, "Stack · ${res.used} kocka · ${res.image.width}×${res.image.height}")
+                val res = stackCore(uris) { p -> stackState.update { it.copy(progress = p) } }
                 stackState.update { it.copy(running = false, log = res.log) }
-                captionFromFrames(res.used)
-                lastFrameCount = res.used
-                // könyvtárba: 16 bites TIFF + miniatűr
-                launch(Dispatchers.IO) {
-                    runCatching {
-                        val thumb = Processor.process(res.image.downscale(320), ProcessParams()).toBitmap()
-                        val cap = caption.value
-                        val entry = Library.saveStack(getApplication<Application>(), res.image, thumb, cap.title, res.used, (res.used * cap.exposure).toInt(), ProcessParams())
-                        currentEntryId = entry.id
-                        libraryVersion.value++
-                    }
-                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 stackState.update { it.copy(running = false, error = "Megszakítva") }
             } catch (e: Throwable) {
@@ -182,6 +187,130 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------------------------------------------------------------- plate solving (astrometry.net)
+    data class SolveState(val running: Boolean = false, val status: String = "", val result: hu.novaprocess.solve.SolveResult? = null, val error: String? = null, val show: Boolean = true)
+    val solve = MutableStateFlow(SolveState())
+    fun runSolve() {
+        val bmp = _ui.value.preview ?: return
+        val src = source ?: return
+        if (solve.value.running) return
+        viewModelScope.launch {
+            solve.value = SolveState(running = true, status = "Indítás…")
+            try {
+                val r = hu.novaprocess.solve.PlateSolver.solve(getApplication(), bmp, src.width, src.height) { st -> solve.update { it.copy(status = st) } }
+                solve.value = SolveState(result = r)
+                // felirat/objektumnév frissítése a legnagyobb objektumból
+                r.annotations.filter { it.type != "star" && it.type != "hd" }.maxByOrNull { it.radius }?.names?.firstOrNull()?.let { n ->
+                    if (caption.value.title.isBlank() || caption.value.title.startsWith("Stack") || caption.value.title.startsWith("Light")) caption.value = caption.value.copy(title = n)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Throwable) { solve.value = SolveState(error = e.message ?: e.javaClass.simpleName) }
+        }
+    }
+    fun toggleAnnotations() { solve.update { it.copy(show = !it.show) } }
+
+    /** Annotációk rárajzolása egy exportált bitmapra (a forrás méretéhez skálázva). */
+    fun annotate(bmp: Bitmap): Bitmap {
+        val r = solve.value.result ?: return bmp
+        val out = if (bmp.isMutable) bmp else bmp.copy(Bitmap.Config.ARGB_8888, true)
+        val cv = android.graphics.Canvas(out)
+        val sx = out.width.toFloat() / r.width; val sy = out.height.toFloat() / r.height
+        val stroke = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { style = android.graphics.Paint.Style.STROKE; strokeWidth = (out.width / 900f).coerceAtLeast(1.5f); color = android.graphics.Color.argb(200, 143, 227, 168) }
+        val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.argb(230, 240, 240, 240); textSize = (out.width / 70f).coerceAtLeast(12f); setShadowLayer(3f, 0f, 0f, android.graphics.Color.BLACK) }
+        for (a in r.annotations) {
+            if (a.type == "star" && a.names.firstOrNull()?.startsWith("HD") == true) continue
+            val x = a.x * sx; val y = a.y * sy; val rad = (a.radius * sx).coerceAtLeast(text.textSize)
+            cv.drawCircle(x, y, rad, stroke)
+            cv.drawText(a.names.firstOrNull() ?: "", x + rad + 4f, y + text.textSize / 3f, text)
+        }
+        return out
+    }
+
+    // ---------------------------------------------------------------- háttér-mintapontok (RBF)
+    fun addBgSample(nx: Float, ny: Float) { commitParams { it.copy(bgSamples = it.bgSamples + listOf(nx.coerceIn(0f, 1f), ny.coerceIn(0f, 1f)), backgroundExtraction = true, backgroundDegree = 3) } }
+    fun clearBgSamples() { commitParams { it.copy(bgSamples = emptyList()) } }
+
+    // ---------------------------------------------------------------- pipeline + sor
+    data class PipelineJob(val name: String, val uris: List<Uri>)
+    data class PipelineState(val jobs: List<PipelineJob> = emptyList(), val running: Boolean = false, val current: String = "", val detail: String = "", val done: List<String> = emptyList(), val error: String? = null)
+    val pipeline = MutableStateFlow(PipelineState())
+    fun enqueueCurrentFrames() {
+        val uris = frames.value.filter { !it.rejected }.map { it.uri }
+        if (uris.isEmpty()) return
+        val first = frames.value.first { !it.rejected }
+        val name = first.objectName ?: first.name.substringBefore("_sub").substringBefore("-sub").substringBeforeLast('.')
+        pipeline.update { it.copy(jobs = it.jobs + PipelineJob("$name (${uris.size})", uris)) }
+        frames.value = emptyList()
+    }
+    fun removeJob(i: Int) { pipeline.update { it.copy(jobs = it.jobs.filterIndexed { k, _ -> k != i }) } }
+
+    /** Minden sorban álló munkára: elemzés → stack → automata szerkesztés → export (JPEG + keretes) a kiválasztott mappába. */
+    fun runPipeline(outputTree: Uri, framed: Boolean = true) {
+        if (pipeline.value.running || pipeline.value.jobs.isEmpty()) return
+        viewModelScope.launch {
+            pipeline.update { it.copy(running = true, error = null, done = emptyList()) }
+            val ctx = getApplication<Application>()
+            val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, outputTree)
+            try {
+                while (pipeline.value.jobs.isNotEmpty()) {
+                    val job = pipeline.value.jobs.first()
+                    pipeline.update { it.copy(current = job.name, detail = "Kockák elemzése…") }
+                    // elemzés + automatikus kizárás (csík, életlen)
+                    val infos = ArrayList<FrameInfo>()
+                    for ((i, u) in job.uris.withIndex()) {
+                        pipeline.update { it.copy(detail = "Elemzés ${i + 1}/${job.uris.size}") }
+                        runCatching { infos.add(withContext(Dispatchers.Default) { FrameAnalyzer.analyze(ctx, u) }) }
+                    }
+                    val good = FrameAnalyzer.autoReject(infos).filter { !it.rejected }
+                    frames.value = FrameAnalyzer.autoReject(infos)
+                    if (good.isEmpty()) { pipeline.update { it.copy(done = it.done + "${job.name}: nincs használható kocka", jobs = it.jobs.drop(1)) }; continue }
+                    val res = stackCore(good.map { it.uri }) { p -> pipeline.update { it.copy(detail = "${p.phase} ${p.current}/${p.total}") } }
+                    pipeline.update { it.copy(detail = "Automata szerkesztés…") }
+                    val auto = withContext(Dispatchers.Default) { AutoEditor.run(previewSource!!, caption.value.title.ifBlank { null }, res.used) }
+                    params.value = auto.params
+                    persistRecipe()
+                    pipeline.update { it.copy(detail = "Export…") }
+                    val base = caption.value.title.ifBlank { "stack" }.replace(Regex("[^A-Za-z0-9_-]"), "_") + "_" + java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(java.util.Date())
+                    withContext(Dispatchers.Default) {
+                        val out = Processor.process(source!!, params.value)
+                        val bmp = Watermark.apply(ctx, out.toBitmap(), watermark.value)
+                        tree?.createFile("image/jpeg", "$base.jpg")?.uri?.let { u -> ctx.contentResolver.openOutputStream(u)!!.use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) } }
+                        if (framed) tree?.createFile("image/jpeg", "${base}_keret.jpg")?.uri?.let { u -> ctx.contentResolver.openOutputStream(u)!!.use { framed(bmp).compress(Bitmap.CompressFormat.JPEG, 95, it) } }
+                    }
+                    pipeline.update { it.copy(done = it.done + "${job.name}: ${res.used} kocka → $base.jpg (${auto.analysis.type.label})", jobs = it.jobs.drop(1)) }
+                    System.gc()
+                }
+                pipeline.update { it.copy(running = false, current = "", detail = "") }
+            } catch (e: kotlinx.coroutines.CancellationException) { pipeline.update { it.copy(running = false, error = "Megszakítva") } }
+            catch (e: Throwable) { System.gc(); pipeline.update { it.copy(running = false, error = (e.message ?: e.toString()), jobs = it.jobs.drop(1)) } }
+        }
+    }
+
+    // ---------------------------------------------------------------- több éjszaka összevonása
+    data class MergeState(val running: Boolean = false, val status: String = "", val error: String? = null, val log: List<String> = emptyList())
+    val merge = MutableStateFlow(MergeState())
+    fun mergeEntries(entries: List<LibraryEntry>) {
+        if (merge.value.running || entries.size < 2) return
+        viewModelScope.launch {
+            merge.value = MergeState(running = true)
+            try {
+                val r = hu.novaprocess.library.Merger.merge(getApplication(), entries) { st -> merge.update { it.copy(status = st) } }
+                setSource(r.image, "Összevont · ${entries.size} éjszaka · ${r.image.width}×${r.image.height}")
+                caption.value = Caption(title = entries[0].title, date = java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date()), frames = r.totalFrames, exposure = if (r.totalFrames > 0) r.totalSec.toFloat() / r.totalFrames else 0f)
+                lastFrameCount = r.totalFrames
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        val thumb = Processor.process(r.image.downscale(320), ProcessParams()).toBitmap()
+                        currentEntryId = Library.saveStack(getApplication<Application>(), r.image, thumb, entries[0].title + " (összevont)", r.totalFrames, r.totalSec, ProcessParams()).id
+                        libraryVersion.value++
+                    }
+                }
+                merge.value = MergeState(log = r.log)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Throwable) { System.gc(); merge.value = MergeState(error = e.message ?: e.toString()) }
+        }
+    }
+
     // ---------------------------------------------------------------- automata szerkesztés
     data class AutoState(val running: Boolean = false, val result: AutoEditor.Result? = null, val error: String? = null)
     val auto = MutableStateFlow(AutoState())
@@ -194,7 +323,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             auto.value = AutoState(running = true)
             try {
-                val hint = caption.value.title.ifBlank { null }
+                val hint = solve.value.result?.annotations?.filter { it.type != "star" }?.maxByOrNull { it.radius }?.names?.firstOrNull() ?: caption.value.title.ifBlank { null }
                 val res = withContext(Dispatchers.Default) { AutoEditor.run(src, hint, lastFrameCount) }
                 auto.value = AutoState(result = res)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -363,6 +492,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---------------------------------------------------------------- export
+    val exportAnnotations = MutableStateFlow(false)
     fun export(uri: Uri, format: ExportFormat, quality: Int = 95) {
         val src = source ?: return
         viewModelScope.launch {
@@ -374,9 +504,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                     cr.openOutputStream(uri)!!.use { os ->
                         when (format) {
                             ExportFormat.TIFF16 -> TiffWriter.write(out, os)
-                            ExportFormat.PNG -> Watermark.apply(getApplication(), out.toBitmap(), watermark.value).compress(Bitmap.CompressFormat.PNG, 100, os)
-                            ExportFormat.JPEG -> Watermark.apply(getApplication(), out.toBitmap(), watermark.value).compress(Bitmap.CompressFormat.JPEG, quality, os)
-                            ExportFormat.FRAMED_JPEG -> framed(Watermark.apply(getApplication(), out.toBitmap(), watermark.value)).compress(Bitmap.CompressFormat.JPEG, quality, os)
+                            ExportFormat.PNG -> Watermark.apply(getApplication(), deco(out.toBitmap()), watermark.value).compress(Bitmap.CompressFormat.PNG, 100, os)
+                            ExportFormat.JPEG -> Watermark.apply(getApplication(), deco(out.toBitmap()), watermark.value).compress(Bitmap.CompressFormat.JPEG, quality, os)
+                            ExportFormat.FRAMED_JPEG -> framed(Watermark.apply(getApplication(), deco(out.toBitmap()), watermark.value)).compress(Bitmap.CompressFormat.JPEG, quality, os)
                         }
                     }
                 }
@@ -388,6 +518,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    private fun deco(b: Bitmap): Bitmap = if (exportAnnotations.value) annotate(b) else b
 
     /** Fekete keret + felirat: objektum · dátum · kockák × expozíció = integráció · eszköz · NovaProcess. */
     private fun framed(src: Bitmap): Bitmap {

@@ -30,6 +30,9 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Compare
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -109,7 +112,8 @@ private val CATEGORIES: List<Pair<String, List<Tool>>> = listOf(
         Tool("bp", "Feketepont", 0f, 0.3f, { "%.3f".format(it) }, get = { it.blackPoint }, set = { p, v -> p.copy(blackPoint = v) }),
         Tool("bge", "Háttér-gradiens kivonás", get = { if (!it.backgroundExtraction) 0f else it.backgroundDegree.toFloat() },
             set = { p, v -> p.copy(backgroundExtraction = v > 0f, backgroundDegree = if (v > 0f) v.toInt() else p.backgroundDegree) },
-            options = listOf("Ki" to 0f, "Sík" to 1f, "Másodfokú" to 2f)),
+            options = listOf("Ki" to 0f, "Sík" to 1f, "Másodfokú" to 2f, "RBF (mintapontok)" to 3f)),
+        Tool("bgs", "RBF simaság", 0f, 1f, get = { it.bgSmooth }, set = { p, v -> p.copy(bgSmooth = v) }),
         Tool("scnr", "SCNR zöld-elnyomás", 0f, 1f, get = { it.scnr }, set = { p, v -> p.copy(scnr = v) }),
         Tool("hdr", "HDR magkompresszió", 0f, 1f, get = { it.hdrCompress }, set = { p, v -> p.copy(hdrCompress = v) }),
         Tool("hdrr", "HDR sugár", 4f, 60f, { "%.0f".format(it) }, get = { it.hdrRadius.toFloat() }, set = { p, v -> p.copy(hdrRadius = v.toInt()) }),
@@ -178,6 +182,10 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     var showExport by remember { mutableStateOf(false) }
     var showPresets by remember { mutableStateOf(false) }
     var showWatermark by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
+    var sampleMode by remember { mutableStateOf(false) }
+    val solve by vm.solve.collectAsState()
+    var imgBox by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     var showHist by remember { mutableStateOf(true) }
 
     LaunchedEffect(ui.message) { ui.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show(); vm.clearMessage() } }
@@ -202,7 +210,16 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
         Box(
             Modifier.fillMaxWidth().weight(1f).background(Color.Black)
                 .pointerInput(Unit) { detectTransformGestures { _, pan, zoom, _ -> scale = (scale * zoom).coerceIn(1f, 8f); offset = if (scale == 1f) Offset.Zero else offset + pan } }
-                .pointerInput(Unit) { detectTapGestures(onPress = { showOriginal = true; tryAwaitRelease(); showOriginal = false }, onDoubleTap = { scale = 1f; offset = Offset.Zero }) },
+                .onSizeChanged { imgBox = it }
+                .pointerInput(sampleMode) { detectTapGestures(
+                    onPress = { if (!sampleMode) { showOriginal = true; tryAwaitRelease(); showOriginal = false } },
+                    onDoubleTap = { scale = 1f; offset = Offset.Zero },
+                    onTap = { pos -> if (sampleMode) { val b = ui.preview; if (b != null && imgBox.width > 0) {
+                        val fit = fitRect(imgBox.width.toFloat(), imgBox.height.toFloat(), b.width.toFloat(), b.height.toFloat())
+                        val nx = (pos.x - fit[0]) / fit[2]; val ny = (pos.y - fit[1]) / fit[3]
+                        if (nx in 0f..1f && ny in 0f..1f) vm.addBgSample(nx, ny)
+                    } } }
+                ) },
             contentAlignment = Alignment.Center
         ) {
             val bmp = if (showOriginal) ui.originalPreview ?: ui.preview else ui.preview
@@ -217,10 +234,43 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                 Text(if (showOriginal) "EREDETI" else ui.sourceInfo, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f).padding(horizontal = 8.dp), maxLines = 1)
                 IconButton(onClick = { vm.runAutoEdit() }, modifier = Modifier.clip(CircleShape).background(cs.primary)) { Icon(Icons.Filled.AutoAwesome, contentDescription = "Automata szerkesztés", tint = cs.onPrimary) }
                 Spacer(Modifier.size(6.dp))
-                IconButton(onClick = { showPresets = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.Bookmarks, contentDescription = "Presetek", tint = cs.onSurface) }
+                Box {
+                    IconButton(onClick = { showMenu = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.MoreVert, contentDescription = "Továbbiak", tint = cs.onSurface) }
+                    androidx.compose.material3.DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        androidx.compose.material3.DropdownMenuItem(text = { Text("Presetek és receptek") }, onClick = { showMenu = false; showPresets = true })
+                        androidx.compose.material3.DropdownMenuItem(text = { Text(if (solve.running) "Plate solve fut…" else "Plate solve (astrometry.net)") }, onClick = { showMenu = false; vm.runSolve() })
+                        if (solve.result != null) androidx.compose.material3.DropdownMenuItem(text = { Text(if (solve.show) "Annotációk elrejtése" else "Annotációk mutatása") }, onClick = { showMenu = false; vm.toggleAnnotations() })
+                        androidx.compose.material3.DropdownMenuItem(text = { Text(if (sampleMode) "Mintapont mód kikapcsolása" else "Háttér-mintapontok (érintéssel)") }, onClick = { showMenu = false; sampleMode = !sampleMode })
+                        if (p.bgSamples.isNotEmpty()) androidx.compose.material3.DropdownMenuItem(text = { Text("Mintapontok törlése (auto-rács)") }, onClick = { showMenu = false; vm.clearBgSamples() })
+                        androidx.compose.material3.DropdownMenuItem(text = { Text("Vízjel") }, onClick = { showMenu = false; showWatermark = true })
+                    }
+                }
                 Spacer(Modifier.size(6.dp))
                 IconButton(onClick = { showExport = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.Download, contentDescription = "Export", tint = cs.onSurface) }
             }
+            // overlay: annotációk (plate solve) és háttér-mintapontok
+            ui.preview?.let { b -> if (scale == 1f && ((solve.show && solve.result != null) || p.bgSamples.isNotEmpty())) {
+                androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                    val fit = fitRect(size.width, size.height, b.width.toFloat(), b.height.toFloat())
+                    solve.result?.let { r -> if (solve.show) for (a in r.annotations) {
+                        if (a.type == "star" && a.names.firstOrNull()?.startsWith("HD") == true) continue
+                        val x = fit[0] + a.x / r.width * fit[2]; val y = fit[1] + a.y / r.height * fit[3]
+                        val rad = (a.radius / r.width * fit[2]).coerceAtLeast(10f)
+                        drawCircle(Color(0xFF8FE3A8), rad, Offset(x, y), style = androidx.compose.ui.graphics.drawscope.Stroke(1.5f))
+                        drawContext.canvas.nativeCanvas.drawText(a.names.firstOrNull() ?: "", x + rad + 6f, y + 10f, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE; textSize = 28f; setShadowLayer(3f, 0f, 0f, android.graphics.Color.BLACK) })
+                    } }
+                    var i = 0; while (i + 1 < p.bgSamples.size) {
+                        val x = fit[0] + p.bgSamples[i] * fit[2]; val y = fit[1] + p.bgSamples[i + 1] * fit[3]
+                        drawCircle(Color(0xFFE8C547), 9f, Offset(x, y), style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
+                        drawCircle(Color(0xFFE8C547), 2.5f, Offset(x, y)); i += 2
+                    }
+                }
+            } }
+            if (sampleMode) Text("Mintapont mód: érints a háttérre (${p.bgSamples.size / 2} pont) · kész: ⋯ menü", style = MaterialTheme.typography.labelSmall, color = Color(0xFFE8C547),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 60.dp).background(Color.Black.copy(alpha = 0.6f)).padding(6.dp))
+            if (solve.running) Text(solve.status, style = MaterialTheme.typography.labelSmall, color = cs.onSurface, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 60.dp).background(Color.Black.copy(alpha = 0.6f)).padding(6.dp))
+            solve.result?.let { r -> if (solve.show) Text("RA ${hu.novaprocess.solve.PlateSolver.formatRa(r.ra)} · Dec ${hu.novaprocess.solve.PlateSolver.formatDec(r.dec)} · %.2f″/px · %.1f°".format(r.pixScale, r.orientation),
+                style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = 60.dp).background(Color.Black.copy(alpha = 0.5f)).padding(4.dp)) }
             if (ui.processing) CircularProgressIndicator(Modifier.align(Alignment.BottomEnd).padding(12.dp).size(22.dp), color = cs.onSurfaceVariant, strokeWidth = 2.dp)
             if (showHist) ui.histogram?.let { Histogram(it, Modifier.align(Alignment.BottomStart).padding(8.dp).fillMaxWidth(0.55f).background(Color.Black.copy(alpha = 0.35f))) }
         }
@@ -316,6 +366,12 @@ private fun PresetSheet(vm: EditorViewModel, onClose: () -> Unit) {
     }
 }
 
+/** ContentScale.Fit elrendezés: [x, y, w, h] a dobozon belül. */
+private fun fitRect(bw: Float, bh: Float, iw: Float, ih: Float): FloatArray {
+    val s = minOf(bw / iw, bh / ih); val w = iw * s; val h = ih * s
+    return floatArrayOf((bw - w) / 2f, (bh - h) / 2f, w, h)
+}
+
 @Composable
 private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: () -> Unit, onClose: () -> Unit) {
     val wm by vm.watermark.collectAsState()
@@ -344,6 +400,11 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: ()
                     androidx.compose.material3.OutlinedTextField(value = if (cap.frames > 0) cap.frames.toString() else "", onValueChange = { vm.caption.value = cap.copy(frames = it.toIntOrNull() ?: 0) }, label = { Text("Kockák") }, singleLine = true, modifier = Modifier.weight(1f))
                     androidx.compose.material3.OutlinedTextField(value = if (cap.exposure > 0f) "%.0f".format(cap.exposure) else "", onValueChange = { vm.caption.value = cap.copy(exposure = it.toFloatOrNull() ?: 0f) }, label = { Text("Expozíció (s)") }, singleLine = true, modifier = Modifier.weight(1f))
                 }
+            }
+            val ann by vm.exportAnnotations.collectAsState()
+            if (vm.solve.value.result != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Annotációk (objektumnevek) a képre", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                androidx.compose.material3.Switch(checked = ann, onCheckedChange = { vm.exportAnnotations.value = it })
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Vízjel: " + when (wm.mode) { hu.novaprocess.process.WmMode.OFF -> "ki"; hu.novaprocess.process.WmMode.TEXT -> "szöveg „${wm.text.take(18)}”"; hu.novaprocess.process.WmMode.IMAGE -> "logó" }, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)

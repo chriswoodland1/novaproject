@@ -14,7 +14,9 @@ data class ProcessParams(
 
     // --- Asztro (lineáris térben, Siril-szerű) ---
     val backgroundExtraction: Boolean = false,
-    val backgroundDegree: Int = 2,            // 1 = sík, 2 = másodfokú
+    val backgroundDegree: Int = 2,            // 1 = sík, 2 = másodfokú, 3 = RBF mintapontokból (GraXpert-szerű)
+    val bgSamples: List<Float> = emptyList(), // kézi mintapontok: x0,y0,x1,y1,… (0..1 normalizált), üres = automatikus rács
+    val bgSmooth: Float = 0.5f,               // RBF simaság 0..1
     val backgroundNeutralize: Boolean = false,
     val neutralizeAfterStretch: Boolean = false, // háttér-semlegesítés a stretch után is (színcast ellen)
     val whiteBalanceStars: Boolean = false,

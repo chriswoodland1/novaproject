@@ -51,6 +51,9 @@ fun LibraryScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
     val version by vm.libraryVersion.collectAsState()
     val entries = remember(version) { Library.list(ctx) }
     var toDelete by remember { mutableStateOf<LibraryEntry?>(null) }
+    var selecting by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val mergeSt by vm.merge.collectAsState()
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? -> if (uri != null) { vm.openSingle(uri); onOpenEditor() } }
     val df = remember { SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault()) }
 
@@ -60,9 +63,22 @@ fun LibraryScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         item(span = { GridItemSpan(2) }) {
-            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Könyvtár", style = MaterialTheme.typography.headlineMedium)
-                TextButton(onClick = { pick.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*")) }) { Text("Kép megnyitása") }
+            Column {
+                Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Könyvtár", style = MaterialTheme.typography.headlineMedium)
+                    Row {
+                        TextButton(onClick = { selecting = !selecting; selected = emptySet() }) { Text(if (selecting) "Kész" else "Kijelölés") }
+                        TextButton(onClick = { pick.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*")) }) { Text("Megnyitás") }
+                    }
+                }
+                if (selecting) Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("${selected.size} kijelölve · több éjszaka összevonása integrációs idővel súlyozva", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    TextButton(enabled = selected.size >= 2 && !mergeSt.running, onClick = {
+                        val es = entries.filter { it.id in selected }
+                        vm.mergeEntries(es); selecting = false; selected = emptySet(); onOpenEditor()
+                    }) { Text(if (mergeSt.running) "Összevonás…" else "Összevonás →") }
+                }
+                mergeSt.error?.let { Text(it, color = cs.error, style = MaterialTheme.typography.bodySmall) }
             }
         }
         if (entries.isEmpty()) item(span = { GridItemSpan(2) }) {
@@ -70,9 +86,13 @@ fun LibraryScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 30.dp))
         }
         items(entries, key = { it.id }) { e ->
-            Column(Modifier.background(Dk.Panel).combinedClickable(onClick = { vm.openEntry(e); onOpenEditor() }, onLongClick = { toDelete = e })) {
+            val isSel = e.id in selected
+            Column(Modifier.background(if (isSel) cs.primary.copy(alpha = 0.25f) else Dk.Panel).combinedClickable(
+                onClick = { if (selecting) selected = if (isSel) selected - e.id else selected + e.id else { vm.openEntry(e); onOpenEditor() } },
+                onLongClick = { if (!selecting) toDelete = e })) {
                 Box(Modifier.fillMaxWidth().aspectRatio(1.2f).background(Dk.Black)) {
                     Library.loadThumb(e.thumbPath)?.let { Image(it.asImageBitmap(), contentDescription = e.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+                    if (selecting) androidx.compose.material3.Checkbox(checked = isSel, onCheckedChange = { c -> selected = if (c) selected + e.id else selected - e.id }, modifier = Modifier.align(Alignment.TopEnd))
                 }
                 Column(Modifier.padding(10.dp)) {
                     Text(e.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
