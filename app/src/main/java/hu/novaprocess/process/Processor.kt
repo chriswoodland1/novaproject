@@ -366,7 +366,8 @@ object Processor {
         for (i in lum.indices) if (lum[i] > lo && lum[i] < 0.95f) { for (c in 0 until 3) sums[c] += src.data[c][i]; n++ }
         if (n < 10) return out
         val mean = sums.average().toFloat()
-        for (c in 0 until 3) { val g = mean / (sums[c] / n).coerceAtLeast(1e-6f); val a = out.data[c]; for (i in a.indices) a[i] *= g }
+        // erősítés = átlagos csatornaösszeg / csatornaösszeg (1 körüli érték), biztonsági korláttal
+        for (c in 0 until 3) { val g = (mean / sums[c].coerceAtLeast(1e-6f)).coerceIn(0.5f, 2f); val a = out.data[c]; for (i in a.indices) a[i] *= g }
         return out
     }
 
