@@ -15,6 +15,13 @@ object ImageLoader {
         return uri.lastPathSegment ?: "kép"
     }
 
+    fun fileSize(context: Context, uri: Uri): Long {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+            val idx = c.getColumnIndex(OpenableColumns.SIZE); if (idx >= 0 && c.moveToFirst()) return c.getLong(idx)
+        }
+        return runCatching { context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L }.getOrDefault(-1L)
+    }
+
     fun isTiff(name: String): Boolean { val n = name.lowercase(); return n.endsWith(".tif") || n.endsWith(".tiff") }
 
     fun isFits(name: String): Boolean {
@@ -38,6 +45,8 @@ object ImageLoader {
                 val bayer = Regex("BAYERPAT\\s*=\\s*'").containsMatchIn(txt)
                 if (w > 0 && h > 0) return Triple(w, h, if (naxis >= 3 || bayer) 3 else 1)
             }
+        } else if (BinReader.isBin(name)) {
+            BinReader.inferLayout(fileSize(context, uri), BinReader.dimsOverride(context))?.let { return Triple(it.width, it.height, 3) }
         } else if (!isTiff(name)) {
             val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, o) }
@@ -80,6 +89,10 @@ object ImageLoader {
                 requireNotNull(ins) { "Nem nyitható: $name" }
                 return TiffReader.read(ins)   // 16 bites lineáris adat, nincs sRGB-konverzió
             }
+        }
+        if (BinReader.isBin(name)) {
+            val size = fileSize(context, uri)
+            cr.openInputStream(uri).use { ins -> requireNotNull(ins) { "Nem nyitható: $name" }; return BinReader.read(context, ins, size) }
         }
         val opts = BitmapFactory.Options().apply { inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888 }
         val bmp = cr.openInputStream(uri).use { ins -> BitmapFactory.decodeStream(ins, null, opts) }

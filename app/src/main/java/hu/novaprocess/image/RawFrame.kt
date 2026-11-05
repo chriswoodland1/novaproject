@@ -90,6 +90,11 @@ class RawFrame private constructor(
                     else RawFrame(img!!.width, img.height, null, null, img, null)
                 }
             }
+            if (BinReader.isBin(name)) {
+                val layout = BinReader.inferLayout(ImageLoader.fileSize(context, uri), BinReader.dimsOverride(context)) ?: throw IllegalArgumentException("Ismeretlen .bin méret: $name")
+                val plane = cr.openInputStream(uri).use { BinReader.readPlane(it!!, layout) }
+                return RawFrame(layout.width, layout.height, plane, BinReader.bayerPattern(context), null, null)
+            }
             if (ImageLoader.isTiff(name)) {
                 val img = ImageLoader.load(context, uri, name)
                 return RawFrame(img.width, img.height, null, null, img, null)

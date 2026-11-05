@@ -65,6 +65,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
     var showSeestar by remember { mutableStateOf(false) }
     var showPlanetary by remember { mutableStateOf(false) }
     var showPipeline by remember { mutableStateOf(false) }
+    var showFolder by remember { mutableStateOf(false) }
 
     // Üres listánál vagy egy már lezárt stack után a kiválasztás LECSERÉLI a listát; a „+ Kockák” hozzáfűz.
     val pickLights = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -103,7 +104,8 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
             if (frames.isEmpty()) item(span = { GridItemSpan(4) }) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Válaszd ki a Seestar _sub FITS kockáit vagy JPEG/PNG sorozatot.", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                    Button(onClick = { pickLights.launch(MIMES) }) { Text("Kockák hozzáadása") }
+                    Button(onClick = { showFolder = true }) { Text("Mappa megnyitása (ajánlással)") }
+                    OutlinedButton(onClick = { pickLights.launch(MIMES) }) { Text("Fájlok kiválasztása") }
                     OutlinedButton(onClick = { showSeestar = true }) { Text("Tallózás a Seestar-on (Wi-Fi)") }
                     OutlinedButton(onClick = { showPlanetary = true }) { Text("Bolygó / Hold videóból") }
                     OutlinedButton(onClick = { showPipeline = true }) { Text("Pipeline · több objektum egy gombbal") }
@@ -118,6 +120,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                         Text("Felirat: FWHM px · piros keret = kizárt (automatikusan vagy érintésre) · érintés a visszavételhez",
                             style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                            OutlinedButton(onClick = { showFolder = true }, enabled = !st.running && !st.analyzing) { Text("Mappa…") }
                             OutlinedButton(onClick = { pickReplace.launch(MIMES) }, enabled = !st.running && !st.analyzing) { Text("Új lista…") }
                             OutlinedButton(onClick = { pickLights.launch(MIMES) }, enabled = !st.running && !st.analyzing) { Text("+ Kockák") }
                             OutlinedButton(onClick = { showSeestar = true }, enabled = !st.running && !st.analyzing) { Text("+ Seestar") }
@@ -174,6 +177,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
     }
 
     if (showPipeline) PipelineSheet(vm) { showPipeline = false }
+    if (showFolder) FolderImportSheet(onPicked = { uris, replace -> if (uris.size == 1 && replace) { vm.openSingle(uris[0]); onOpenEditor() } else vm.addFrames(uris, replace) }, onClose = { showFolder = false })
     if (showPlanetary) PlanetarySheet(vm, onDone = onOpenEditor, onClose = { showPlanetary = false })
     if (showSeestar) SeestarSheet(onPicked = { vm.addFrames(it) }, onClose = { showSeestar = false })
 

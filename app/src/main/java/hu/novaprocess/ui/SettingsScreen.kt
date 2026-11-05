@@ -67,6 +67,18 @@ fun SettingsScreen(vm: EditorViewModel) {
         OutlinedTextField(value = astroKey, onValueChange = { astroKey = it }, label = { Text("API-kulcs") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
         Button(onClick = { hu.novaprocess.solve.PlateSolver.setApiKey(ctx, astroKey) }, modifier = Modifier.padding(top = 8.dp)) { Text("Mentés") }
 
+        var binBayer by remember { mutableStateOf(hu.novaprocess.image.BinReader.bayerPattern(ctx)) }
+        var binDims by remember { mutableStateOf(ctx.getSharedPreferences("nova_ui", 0).getString("bin_dims", "") ?: "") }
+        Text("Nyers .bin kockák", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
+        Text("Fejléc nélküli nyers Bayer-fájlok: a méretet a fájlhosszból ismeri fel (pl. 3840×2160×2 bájt). Bayer-minta és kézi felbontás:", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
+            listOf("GRBG", "RGGB", "BGGR", "GBRG").forEach { pat -> Pill(pat, binBayer == pat) { binBayer = pat; hu.novaprocess.image.BinReader.setBayerPattern(ctx, pat) } }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(value = binDims, onValueChange = { binDims = it }, label = { Text("Felbontás (üres = automatikus)") }, singleLine = true, modifier = Modifier.weight(1f))
+            TextButton(onClick = { hu.novaprocess.image.BinReader.setDimsOverride(ctx, binDims) }) { Text("Mentés") }
+        }
+
         Text("Frissítési forrás", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
         OutlinedTextField(value = repo, onValueChange = { repo = it }, label = { Text("GitHub repo (tulajdonos/név)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Button(onClick = { UpdateManager.setRepo(ctx, repo) }, modifier = Modifier.padding(top = 8.dp)) { Text("Mentés") }
