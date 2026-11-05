@@ -33,9 +33,12 @@ object FrameAnalyzer {
 
     fun analyze(context: Context, uri: Uri, analysisSide: Int = 1000, thumbSide: Int = 220): FrameInfo {
         val name = ImageLoader.displayName(context, uri)
-        val (full, meta) = ImageLoader.loadWithMeta(context, uri, name)
-        val scaleDown = maxOf(full.width, full.height).toFloat() / analysisSide
-        val small = full.downscale(analysisSide)
+        var meta: ImageLoader.Meta? = null
+        var scaleDown = 1f
+        val small = ImageLoader.loadWithMeta(context, uri, name).let { (full, m) ->
+            meta = m; scaleDown = maxOf(full.width, full.height).toFloat() / analysisSide
+            full.downscale(analysisSide)   // a teljes kép itt elengedhető
+        }
         val mono = small.toMono()
         val stars = StarDetector.detect(mono, maxStars = 150, sigmaK = 6f)
         val a = mono.data[0]; val w = mono.width; val h = mono.height

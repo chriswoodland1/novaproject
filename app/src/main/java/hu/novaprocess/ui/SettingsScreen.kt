@@ -62,6 +62,22 @@ fun SettingsScreen(vm: EditorViewModel) {
         OutlinedTextField(value = repo, onValueChange = { repo = it }, label = { Text("GitHub repo (tulajdonos/név)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Button(onClick = { UpdateManager.setRepo(ctx, repo) }, modifier = Modifier.padding(top = 8.dp)) { Text("Mentés") }
 
+        val app = ctx.applicationContext as android.app.Application
+        var crash by remember { mutableStateOf(hu.novaprocess.NovaApp.lastCrash(app)) }
+        Text("Diagnosztika", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 24.dp, bottom = 6.dp))
+        Text("Memóriakeret: ${hu.novaprocess.NovaApp.maxHeapMb()} MB · processzormagok: ${Runtime.getRuntime().availableProcessors()}", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        if (crash != null) {
+            Text("Utolsó összeomlás naplója:", style = MaterialTheme.typography.bodySmall, color = cs.error, modifier = Modifier.padding(top = 8.dp))
+            Text(crash!!.take(1200), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("NovaProcess crash", crash))
+                }) { Text("Másolás vágólapra") }
+                TextButton(onClick = { hu.novaprocess.NovaApp.clearCrash(app); crash = null }) { Text("Törlés") }
+            }
+        } else Text("Nincs rögzített összeomlás.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+
         Text("Tippek", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 24.dp, bottom = 6.dp))
         Text("• A szerkesztőben a képet nyomva tartva az eredetit látod; dupla érintés = nagyítás vissza.\n" +
              "• A kockák rácsában a piros keretes kockák kimaradnak; érintésre visszaveheted őket.\n" +

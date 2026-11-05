@@ -90,13 +90,13 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         if (new.isEmpty()) return
         viewModelScope.launch {
             stackState.update { it.copy(analyzing = true, analyzed = 0, error = null) }
-            val sem = Semaphore(2)
+            val sem = Semaphore(1)
             val infos = withContext(Dispatchers.Default) {
                 new.map { uri ->
                     async {
                         sem.withPermit {
                             val info = try { FrameAnalyzer.analyze(getApplication<Application>(), uri) }
-                            catch (e: Exception) { FrameInfo(uri, ImageLoader.displayName(getApplication<Application>(), uri), 0f, 0, 0f, 0f, null, true, "nem olvasható") }
+                            catch (e: Throwable) { FrameInfo(uri, ImageLoader.displayName(getApplication<Application>(), uri), 0f, 0, 0f, 0f, null, true, "nem olvasható") }
                             stackState.update { it.copy(analyzed = it.analyzed + 1) }
                             info
                         }
@@ -137,8 +137,12 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                         libraryVersion.value++
                     }
                 }
-            } catch (e: Exception) {
-                stackState.update { it.copy(running = false, error = e.message ?: e.toString()) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                stackState.update { it.copy(running = false, error = "Megszakítva") }
+            } catch (e: Throwable) {
+                System.gc()
+                val msg = if (e is OutOfMemoryError) "Elfogyott a memória (${hu.novaprocess.NovaApp.maxHeapMb()} MB keret). Kapcsold be a 2×2 binninget vagy kevesebb kockával próbáld." else (e.message ?: e.toString())
+                stackState.update { it.copy(running = false, error = msg) }
             }
         }
     }
@@ -206,7 +210,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                         libraryVersion.value++
                     }
                 }
-            } catch (e: Exception) { planetaryError.value = e.message ?: e.toString() }
+            } catch (e: Throwable) { System.gc(); planetaryError.value = if (e is OutOfMemoryError) "Elfogyott a memória – csökkentsd a munkafelbontást vagy a kockaszámot." else (e.message ?: e.toString()) }
             planetaryRunning.value = false; planetaryProgress.value = null
         }
     }
@@ -304,12 +308,14 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             if (!immediate) delay(100)
             _ui.update { it.copy(processing = true) }
             val p = params.value
-            val result = withContext(Dispatchers.Default) {
+            val result = try { withContext(Dispatchers.Default) {
                 val out = Processor.process(src, p)
                 val lum = out.toMono().data[0]
                 val med = Processor.median(lum); val mad = Processor.mad(lum, med)
                 var clipped = 0; for (v in lum) if (v >= 0.999f) clipped++
                 Triple(out.toBitmap(), Processor.histogram(out), "MED %.3f · MAD %.3f · CLIP %.2f%%".format(med, mad, 100f * clipped / lum.size))
+            } } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) {
+                _ui.update { it.copy(processing = false, message = "Előnézet hiba: ${e.message ?: e.javaClass.simpleName}") }; return@launch
             }
             _ui.update { it.copy(preview = result.first, histogram = result.second, stats = result.third, processing = false) }
         }
@@ -335,8 +341,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 persistRecipe()
                 _ui.update { it.copy(exporting = false, message = "Exportálva.") }
-            } catch (e: Exception) {
-                _ui.update { it.copy(exporting = false, message = "Export hiba: ${e.message}") }
+            } catch (e: Throwable) {
+                System.gc()
+                _ui.update { it.copy(exporting = false, message = if (e is OutOfMemoryError) "Export: elfogyott a memória." else "Export hiba: ${e.message}") }
             }
         }
     }

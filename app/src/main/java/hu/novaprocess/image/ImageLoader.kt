@@ -22,6 +22,31 @@ object ImageLoader {
         return n.endsWith(".fit") || n.endsWith(".fits") || n.endsWith(".fts")
     }
 
+    /** (szélesség, magasság, csatornák) a teljes dekódolás nélkül. */
+    fun probeSize(context: Context, uri: Uri): Triple<Int, Int, Int> {
+        val name = displayName(context, uri)
+        val cr = context.contentResolver
+        if (isFits(name)) {
+            cr.openInputStream(uri)?.use { ins ->
+                val block = ByteArray(2880 * 4)
+                var read = 0
+                while (read < block.size) { val n = ins.read(block, read, block.size - read); if (n <= 0) break; read += n }
+                val txt = String(block, 0, read, Charsets.US_ASCII)
+                fun key(k: String) = Regex("$k\\s*=\\s*(-?\\d+)").find(txt)?.groupValues?.get(1)?.toIntOrNull()
+                val w = key("NAXIS1") ?: 0; val h = key("NAXIS2") ?: 0
+                val naxis = key("NAXIS") ?: 2
+                val bayer = Regex("BAYERPAT\\s*=\\s*'").containsMatchIn(txt)
+                if (w > 0 && h > 0) return Triple(w, h, if (naxis >= 3 || bayer) 3 else 1)
+            }
+        } else if (!isTiff(name)) {
+            val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, o) }
+            if (o.outWidth > 0) return Triple(o.outWidth, o.outHeight, 3)
+        }
+        val img = load(context, uri, name)
+        return Triple(img.width, img.height, img.channels)
+    }
+
     data class Meta(val objectName: String?, val exposure: Float?, val dateObs: String?, val ra: String?, val dec: String?, val instrument: String?)
 
     fun metaOf(cards: Map<String, String>): Meta = Meta(

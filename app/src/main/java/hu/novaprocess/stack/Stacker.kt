@@ -47,10 +47,32 @@ object Stacker {
         require(frames.isNotEmpty()) { "Nincs kocka kiválasztva" }
         val log = ArrayList<String>()
 
+        // --- memóriaterv: a kocka mérete alapján automatikus binning, hogy ne fussunk OutOfMemory-ba ---
+        onProgress(StackProgress("Memóriaterv", 0, frames.size))
+        val probe = ImageLoader.probeSize(context, frames[0])          // (w, h, channels) a teljes kép betöltése nélkül, ha FITS
+        val maxHeap = Runtime.getRuntime().maxMemory()
+        var binning = opts.binning.coerceAtLeast(1)
+        var dz = opts.drizzle.coerceIn(1, 2)
+        fun estimate(b: Int, d: Int): Long {
+            val px = (probe.first.toLong() / b) * (probe.second.toLong() / b)
+            val outPx = px * d * d
+            val ch = probe.third.toLong()
+            // gyűjtők (mean, m2/sigma, sum: 3×ch float + count, n: 2 int) a kimeneti rácson
+            val acc = outPx * (3 * ch * 4 + 8)
+            // munkaképek: betöltési csúcs (FITS nyers + debayer teljes felbontáson) + binnelt kocka + regisztrált kocka
+            val loadPeak = (probe.first.toLong() * probe.second.toLong()) * (4 + ch * 4)
+            val work = loadPeak + px * ch * 4 + outPx * ch * 4
+            return acc + work
+        }
+        val budget = (maxHeap * 0.65).toLong()
+        if (dz == 2 && estimate(binning, dz) > budget) { dz = 1; log += "Drizzle kikapcsolva: nem fér a memóriába (${maxHeap / 1048576} MB)" }
+        while (estimate(binning, dz) > budget && binning < 8) binning *= 2
+        if (binning != opts.binning.coerceAtLeast(1)) log += "Memória miatt ${binning}×${binning} binning (${probe.first}×${probe.second} kocka, ${maxHeap / 1048576} MB keret)"
+
         // --- mesterkockák ---
-        val dark = buildMaster(context, opts.darkUris, opts.binning, "Dark", opts.medianMasters) { onProgress(it) }
-        val flat = buildMaster(context, opts.flatUris, opts.binning, "Flat", opts.medianMasters) { onProgress(it) }
-        val bias = buildMaster(context, opts.biasUris, opts.binning, "Bias", opts.medianMasters) { onProgress(it) }
+        val dark = buildMaster(context, opts.darkUris, binning, "Dark", opts.medianMasters) { onProgress(it) }
+        val flat = buildMaster(context, opts.flatUris, binning, "Flat", opts.medianMasters) { onProgress(it) }
+        val bias = buildMaster(context, opts.biasUris, binning, "Bias", opts.medianMasters) { onProgress(it) }
         val hotMap: BooleanArray? = if (opts.hotPixelFix && dark != null) hotPixelMap(dark).also { m ->
             log += "Hot pixel térkép: ${m.count { it }} pixel"
         } else null
@@ -69,17 +91,17 @@ object Stacker {
 
         // --- referencia ---
         onProgress(StackProgress("Referencia betöltése", 0, frames.size))
-        val ref = loadCalibrated(context, frames[0], opts.binning, dark, flatNorm, bias, hotMap)
-        val w0 = ref.width; val h0 = ref.height; val ch = ref.channels
-        val dz = opts.drizzle.coerceIn(1, 2)
+        var ref: FloatImage? = loadCalibrated(context, frames[0], binning, dark, flatNorm, bias, hotMap)
+        val w0 = ref!!.width; val h0 = ref.height; val ch = ref.channels
         val w = w0 * dz; val h = h0 * dz
         if (dz > 1) log += "Drizzle ${dz}×: kimenet ${w}×${h}"
         val refStars = if (opts.alignFrames) StarDetector.detect(ref) else emptyList()
         log += "Referencia: ${w0}×${h0}, ${refStars.size} csillag"
 
         // --- 1. menet: Welford ---
+        val needSigma = opts.method != StackMethod.MEAN
         val mean = Array(ch) { FloatArray(w * h) }
-        val m2 = Array(ch) { FloatArray(w * h) }
+        val m2 = if (needSigma) Array(ch) { FloatArray(w * h) } else null
         val count = IntArray(w * h)
         val transforms = ArrayList<Transform?>()
         var used = 0; var rejected = 0
@@ -87,7 +109,7 @@ object Stacker {
         for ((idx, uri) in frames.withIndex()) {
             coroutineContext.ensureActive()
             onProgress(StackProgress("1. menet · igazítás", idx + 1, frames.size, ImageLoader.displayName(context, uri)))
-            val img = if (idx == 0) ref else loadCalibrated(context, uri, opts.binning, dark, flatNorm, bias, hotMap)
+            val img = if (idx == 0) ref!!.also { ref = null } else loadCalibrated(context, uri, binning, dark, flatNorm, bias, hotMap)
             if (img.width != w0 || img.height != h0 || img.channels != ch) {
                 log += "Kihagyva (eltérő méret): ${ImageLoader.displayName(context, uri)}"
                 transforms.add(null); rejected++; continue
@@ -103,6 +125,7 @@ object Stacker {
             transforms.add(tf)
             val reg = registered(img, tf, dz)
             accumulateWelford(reg, mean, m2, count)
+            if (idx % 5 == 4) System.gc()
             used++
         }
         if (used == 0) throw IllegalStateException("Egyetlen kocka sem igazítható a referenciához")
@@ -111,8 +134,9 @@ object Stacker {
         if (opts.method == StackMethod.MEAN || used < 3) {
             for (c in 0 until ch) System.arraycopy(mean[c], 0, result.data[c], 0, w * h)
         } else {
-            // szórás a Welford M2-ből
-            val sigma = Array(ch) { c -> FloatArray(w * h) { i -> if (count[i] > 1) sqrt(m2[c][i] / (count[i] - 1)) else 0f } }
+            // szórás a Welford M2-ből – helyben, új tömb nélkül
+            val sigma = m2!!
+            for (c in 0 until ch) { val a = sigma[c]; for (i in 0 until w * h) a[i] = if (count[i] > 1) sqrt(a[i] / (count[i] - 1)) else 0f }
             val sum = Array(ch) { FloatArray(w * h) }
             val n = IntArray(w * h)
             // --- 2. menet ---
@@ -120,8 +144,9 @@ object Stacker {
                 coroutineContext.ensureActive()
                 val tf = transforms[idx] ?: continue
                 onProgress(StackProgress("2. menet · sigma-clip", idx + 1, frames.size, ImageLoader.displayName(context, uri)))
-                val img = loadCalibrated(context, uri, opts.binning, dark, flatNorm, bias, hotMap)
+                val img = loadCalibrated(context, uri, binning, dark, flatNorm, bias, hotMap)
                 val reg = registered(img, tf, dz)
+                if (idx % 5 == 4) System.gc()
                 for (c in 0 until ch) {
                     val a = reg.data[c]; val mu = mean[c]; val sg = sigma[c]; val s = sum[c]
                     for (i in 0 until w * h) {
@@ -181,17 +206,19 @@ object Stacker {
         }
     }
 
-    private fun accumulateWelford(img: FloatImage, mean: Array<FloatArray>, m2: Array<FloatArray>, count: IntArray) {
+    private fun accumulateWelford(img: FloatImage, mean: Array<FloatArray>, m2: Array<FloatArray>?, count: IntArray) {
         val n = img.size
         for (i in 0 until n) count[i]++
         for (c in 0 until img.channels) {
-            val a = img.data[c]; val mu = mean[c]; val s = m2[c]
-            for (i in 0 until n) {
-                val v = a[i]
-                val k = count[i]
-                val delta = v - mu[i]
-                mu[i] += delta / k
-                s[i] += delta * (v - mu[i])
+            val a = img.data[c]; val mu = mean[c]; val s = m2?.get(c)
+            hu.novaprocess.image.Par.range(n) { i0, i1 ->
+                for (i in i0 until i1) {
+                    val v = a[i]
+                    val k = count[i]
+                    val delta = v - mu[i]
+                    mu[i] += delta / k
+                    if (s != null) s[i] += delta * (v - mu[i])
+                }
             }
         }
     }
@@ -224,7 +251,7 @@ object Stacker {
         if (median && uris.size >= 3) {
             val first = ImageLoader.load(context, uris[0]).let { if (binning > 1) it.downscale(maxOf(it.width, it.height) / binning) else it }
             val bytes = first.size.toLong() * first.channels * 4L * uris.size
-            if (bytes < 400L * 1024 * 1024) {
+            if (bytes < (Runtime.getRuntime().maxMemory() * 0.35).toLong()) {
                 val all = ArrayList<FloatImage>(uris.size); all.add(first)
                 for (i in 1 until uris.size) {
                     onProgress(StackProgress("Master $label (medián)", i + 1, uris.size))
