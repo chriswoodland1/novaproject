@@ -100,12 +100,13 @@ object FrameAnalyzer {
         // maszk: fényes pixelek, kivéve a kompakt (csillag) foltokat → 2 px-es nyitás után maradó vonalas struktúrák
         val mask = BooleanArray(w * h) { a[it] > thr }
         val opened = BooleanArray(w * h)
-        for (y in 1 until h - 1) for (x in 1 until w - 1) {
+        if (w < 8 || h < 8) return false
+        for (y in 2 until h - 2) for (x in 2 until w - 2) {
             val i = y * w + x
             if (!mask[i]) continue
-            // vízszintes VAGY függőleges VAGY átlós 5 hosszú futás → vonal-jelölt
+            // vízszintes VAGY függőleges VAGY átlós 5 hosszú futás → vonal-jelölt (±2 px, a szélektől 2 px-re indulva)
             var runH = 0; var runV = 0; var runD1 = 0; var runD2 = 0
-            for (d in -2..2) { if (mask[i + d]) runH++; if (mask[i + d * w]) runV++; if (x + d in 0 until w && y + d in 0 until h && mask[(y + d) * w + x + d]) runD1++; if (x - d in 0 until w && y + d in 0 until h && mask[(y + d) * w + x - d]) runD2++ }
+            for (d in -2..2) { if (mask[i + d]) runH++; if (mask[i + d * w]) runV++; if (mask[(y + d) * w + x + d]) runD1++; if (mask[(y + d) * w + x - d]) runD2++ }
             opened[i] = runH == 5 || runV == 5 || runD1 == 5 || runD2 == 5
         }
         val total = opened.count { it }
