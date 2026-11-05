@@ -8,6 +8,7 @@ import java.io.StringWriter
 class NovaApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        hu.novaprocess.image.FitsReader.bayerOverride = getSharedPreferences("nova_ui", MODE_PRIVATE).getString("fits_bayer", null)?.takeIf { it.length == 4 }
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             runCatching {

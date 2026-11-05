@@ -42,7 +42,7 @@ object ImageLoader {
                 fun key(k: String) = Regex("$k\\s*=\\s*(-?\\d+)").find(txt)?.groupValues?.get(1)?.toIntOrNull()
                 val w = key("NAXIS1") ?: 0; val h = key("NAXIS2") ?: 0
                 val naxis = key("NAXIS") ?: 2
-                val bayer = Regex("BAYERPAT\\s*=\\s*'").containsMatchIn(txt)
+                val bayer = Regex("BAYERPAT\\s*=\\s*'").containsMatchIn(txt) || FitsReader.bayerOverride != null
                 if (w > 0 && h > 0) return Triple(w, h, if (naxis >= 3 || bayer) 3 else 1)
             }
         } else if (BinReader.isBin(name)) {

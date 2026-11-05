@@ -26,17 +26,19 @@ object FitsReader {
     fun readRawOrImage(input: InputStream): Triple<FloatImage?, Map<String, String>, Triple<Int, Int, FloatArray>?> {
         val din = DataInputStream(input.buffered(1 shl 16))
         val header = readHeader(din)
-        if (header.naxis == 2 && header.bayerPat != null) {
+        val flip = !topDown(header)
+        if (header.naxis == 2 && (header.bayerPat != null || bayerOverride != null)) {
             val w = header.naxis1; val h = header.naxis2
             val plane = readPlane(din, header, w, h)
-            flipVertical(plane, w, h)
-            return Triple(null, header.cards, Triple(w, h, plane))
+            if (flip) flipVertical(plane, w, h)
+            val cards = HashMap(header.cards); cards["BAYERPAT"] = effectivePattern(header, flip)!!
+            return Triple(null, cards, Triple(w, h, plane))
         }
         // visszaesés: teljes olvasás (a fejlécet már elolvastuk, ezért a maradékot dolgozzuk fel)
         val planes = if (header.naxis >= 3) header.naxis3 else 1
         val w = header.naxis1; val h = header.naxis2
         val raw = Array(planes) { readPlane(din, header, w, h) }
-        for (p in raw) flipVertical(p, w, h)
+        if (flip) for (p in raw) flipVertical(p, w, h)
         val img = if (planes >= 3) FloatImage(w, h, 3).also { img -> for (c in 0 until 3) System.arraycopy(raw[c], 0, img.data[c], 0, w * h) }
                   else FloatImage(w, h, 1).also { System.arraycopy(raw[0], 0, it.data[0], 0, w * h) }
         return Triple(img, header.cards, null)
@@ -63,7 +65,14 @@ object FitsReader {
                 else -> throw IllegalArgumentException("Nem támogatott BITPIX: ${header.bitpix}")
             }
         }
-        val m = if (header.bitpix < 0) (if (fmax > 0f) fmax else 1f) else maxVal
+        // effektív bitmélység: 16 bites tárolóban gyakran 10/12/14 bites adat van (Seestar) → a tényleges maximumhoz igazítunk
+        var m = if (header.bitpix < 0) (if (fmax > 0f) fmax else 1f) else maxVal
+        if (header.bitpix == 16 || header.bitpix == 8) {
+            var mx = 0f
+            for (i in dst.indices) { val v = dst[i] * scale + zero; if (v > mx) mx = v }
+            m = when { mx <= 1023f -> 1023f; mx <= 4095f -> 4095f; mx <= 16383f -> 16383f; else -> maxVal }
+            if (header.bitpix == 8) m = 255f
+        }
         for (i in dst.indices) dst[i] = ((dst[i] * scale + zero) / m).coerceIn(0f, 1f)
         return dst
     }
@@ -76,51 +85,35 @@ object FitsReader {
         val planes = if (header.naxis >= 3) header.naxis3 else 1
         require(w > 0 && h > 0) { "Érvénytelen FITS méret" }
 
-        val bytesPerPx = kotlin.math.abs(header.bitpix) / 8
-        val planeBytes = ByteArray(w * h * bytesPerPx)
-        val raw = Array(planes) { FloatArray(w * h) }
-        for (p in 0 until planes) {
-            din.readFully(planeBytes)
-            val bb = ByteBuffer.wrap(planeBytes).order(ByteOrder.BIG_ENDIAN)
-            val dst = raw[p]
-            when (header.bitpix) {
-                8 -> for (i in 0 until w * h) dst[i] = (bb.get(i).toInt() and 0xFF).toFloat()
-                16 -> for (i in 0 until w * h) dst[i] = bb.getShort(i * 2).toFloat()
-                32 -> for (i in 0 until w * h) dst[i] = bb.getInt(i * 4).toFloat()
-                -32 -> for (i in 0 until w * h) dst[i] = bb.getFloat(i * 4)
-                -64 -> for (i in 0 until w * h) dst[i] = bb.getDouble(i * 8).toFloat()
-                else -> throw IllegalArgumentException("Nem támogatott BITPIX: ${header.bitpix}")
-            }
-        }
+        val raw = Array(planes) { readPlane(din, header, w, h) }
 
-        // BZERO/BSCALE alkalmazása, majd normalizálás 0..1-re
-        val scale = header.bscale.toFloat(); val zero = header.bzero.toFloat()
-        var maxVal = when (header.bitpix) {
-            8 -> 255f
-            16 -> 65535f
-            32 -> 4294967295f
-            else -> 1f
-        }
-        if (header.bitpix < 0) {
-            // float adat: tényleges maximumot használjuk
-            var m = 0f
-            for (p in raw) for (v in p) if (v > m) m = v
-            maxVal = if (m > 0f) m else 1f
-        }
-        for (p in raw) for (i in p.indices) p[i] = ((p[i] * scale + zero) / maxVal).coerceIn(0f, 1f)
-
-        // FITS: az első sor a kép ALJA → függőleges tükrözés
-        for (p in raw) flipVertical(p, w, h)
+        // FITS: alapból az első sor a kép ALJA → tükrözés; ROWORDER='TOP-DOWN' (Seestar/ASIAIR) esetén nem
+        val flip = !topDown(header)
+        if (flip) for (p in raw) flipVertical(p, w, h)
+        val pat = effectivePattern(header, flip)
 
         val img = when {
             planes >= 3 -> FloatImage(w, h, 3).also { img ->
                 for (c in 0 until 3) System.arraycopy(raw[c], 0, img.data[c], 0, w * h)
             }
-            header.bayerPat != null -> debayer(raw[0], w, h, header.bayerPat)
+            pat != null -> debayer(raw[0], w, h, pat)
             else -> FloatImage(w, h, 1).also { System.arraycopy(raw[0], 0, it.data[0], 0, w * h) }
         }
-        return Pair(img, header.cards)
+        val cards = HashMap(header.cards); if (pat != null) cards["BAYERPAT"] = pat
+        return Pair(img, cards)
     }
+
+    /** Kézi Bayer-felülbírálás (null = a fejlécből). A Beállításokból állítható. */
+    @Volatile var bayerOverride: String? = null
+
+    /** TOP-DOWN sorrend esetén nincs tükrözés; BOTTOM-UP (vagy hiányzó) esetén tükrözünk, és a Bayer-minta sorait felcseréljük. */
+    private fun effectivePattern(header: Header, flipped: Boolean): String? {
+        val base = bayerOverride ?: header.bayerPat ?: return null
+        if (!flipped) return base
+        // tükrözés páros magasságnál: a 2×2 minta sorai cserélődnek (GRBG → BGGR, RGGB → GBRG …)
+        return if (header.naxis2 % 2 == 0) "" + base[2] + base[3] + base[0] + base[1] else base
+    }
+    private fun topDown(header: Header): Boolean = header.cards["ROWORDER"]?.uppercase()?.contains("TOP") == true
 
     private fun flipVertical(a: FloatArray, w: Int, h: Int) {
         val row = FloatArray(w)

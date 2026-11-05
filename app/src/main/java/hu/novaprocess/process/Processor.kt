@@ -558,7 +558,7 @@ object Processor {
     private fun mtfMidtoneFor(x: Float, target: Float): Float {
         // MTF inverz: m, amelyre mtf(m, x) = target.  (m-1)x = t((2m-1)x - m)  →  m = x(1-t) / (x - 2tx + t)
         val den = x - 2f * target * x + target
-        return if (abs(den) < 1e-6f) 0.5f else (x * (1f - target) / den).coerceIn(0.001f, 0.999f)
+        return if (abs(den) < 1e-9f) 0.5f else (x * (1f - target) / den).coerceIn(1e-6f, 0.999999f)
     }
 
     // ---------------------------------------------------------------- csillagcsökkentés

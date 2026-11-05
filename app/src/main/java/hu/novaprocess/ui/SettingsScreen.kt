@@ -69,6 +69,18 @@ fun SettingsScreen(vm: EditorViewModel) {
 
         var binBayer by remember { mutableStateOf(hu.novaprocess.image.BinReader.bayerPattern(ctx)) }
         var binDims by remember { mutableStateOf(ctx.getSharedPreferences("nova_ui", 0).getString("bin_dims", "") ?: "") }
+        var fitsBayer by remember { mutableStateOf(hu.novaprocess.image.FitsReader.bayerOverride ?: "AUTO") }
+        Text("FITS Bayer-minta", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
+        Text("Alapból a fejléc (BAYERPAT + ROWORDER) dönt. Ha a színek felcserélődnek (pl. a vörös Hα-köd zöld vagy kék), válassz mintát kézzel; a változás a következő stacktől/megnyitástól él.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
+            listOf("AUTO", "GRBG", "RGGB", "BGGR", "GBRG").forEach { pat -> Pill(pat, fitsBayer == pat) {
+                fitsBayer = pat
+                val v = if (pat == "AUTO") null else pat
+                hu.novaprocess.image.FitsReader.bayerOverride = v
+                ctx.getSharedPreferences("nova_ui", 0).edit().putString("fits_bayer", v).apply()
+            } }
+        }
+
         Text("Nyers .bin kockák", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
         Text("Fejléc nélküli nyers Bayer-fájlok: a méretet a fájlhosszból ismeri fel (pl. 3840×2160×2 bájt). Bayer-minta és kézi felbontás:", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
