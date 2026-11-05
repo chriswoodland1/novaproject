@@ -121,9 +121,18 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         stackJob = viewModelScope.launch {
             stackState.update { it.copy(running = true, error = null, log = emptyList()) }
             try {
-                val res = Stacker.stack(getApplication<Application>(), uris, stackOptions.value) { p ->
-                    stackState.update { it.copy(progress = p) }
-                }
+                val o = stackOptions.value
+                val heapMb = hu.novaprocess.NovaApp.maxHeapMb()
+                val wantFull = o.drizzle == 1 && (o.resolution == hu.novaprocess.stack.Resolution.FULL || (o.resolution == hu.novaprocess.stack.Resolution.AUTO && heapMb >= hu.novaprocess.stack.TiledStacker.MIN_HEAP_MB))
+                val progress: (StackProgress) -> Unit = { p -> stackState.update { it.copy(progress = p) } }
+                val res = if (wantFull) {
+                    try { hu.novaprocess.stack.TiledStacker.stack(getApplication<Application>(), uris, o, progress) }
+                    catch (e: OutOfMemoryError) {
+                        System.gc()
+                        stackState.update { it.copy(log = it.log + "Teljes felbontás nem fért a memóriába – újra 2×2 binninggel") }
+                        Stacker.stack(getApplication<Application>(), uris, o.copy(binning = 2), progress)
+                    }
+                } else Stacker.stack(getApplication<Application>(), uris, o.copy(binning = if (o.resolution == hu.novaprocess.stack.Resolution.BIN2) 2 else o.binning), progress)
                 setSource(res.image, "Stack · ${res.used} kocka · ${res.image.width}×${res.image.height}")
                 stackState.update { it.copy(running = false, log = res.log) }
                 captionFromFrames(res.used)

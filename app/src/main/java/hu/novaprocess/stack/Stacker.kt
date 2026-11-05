@@ -11,12 +11,14 @@ import kotlin.coroutines.coroutineContext
 import kotlin.math.sqrt
 
 enum class StackMethod { MEAN, SIGMA_CLIP, WINSORIZED }
+enum class Resolution { AUTO, FULL, BIN2 }
 
 data class StackOptions(
     val method: StackMethod = StackMethod.SIGMA_CLIP,
     val sigmaLow: Float = 3f,
     val sigmaHigh: Float = 3f,
     val binning: Int = 1,              // 1 = teljes felbontás, 2 = fél (gyors, kevesebb memória)
+    val resolution: Resolution = Resolution.AUTO, // AUTO: teljes (sávos) ha a memória engedi, különben 2×2
     val minMatches: Int = 6,           // ennél kevesebb csillag-egyezéssel a kocka kimarad
     val alignFrames: Boolean = true,
     val drizzle: Int = 1,              // 1 = ki, 2 = 2× felskálázott kimenet

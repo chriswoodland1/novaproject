@@ -59,7 +59,7 @@ object Processor {
             val d2 = b1[i] - b2[i]; val d3 = b2[i] - b3[i]
             detail[i] = d1 * gains[0] + d2 * gains[1] + d3 * gains[2] + (if (thr > 0f) (d1 - (lum[i] - b1[i])) else 0f)
         }
-        val out = src.copy()
+        val out = src
         for (c in 0 until out.channels) { val a = out.data[c]; for (i in a.indices) a[i] = (a[i] + detail[i]).coerceIn(0f, 1f) }
         return out
     }
@@ -67,7 +67,7 @@ object Processor {
     // ---------------------------------------------------------------- SCNR (zöld-elnyomás, average neutral)
     fun scnr(src: FloatImage, amount: Float): FloatImage {
         if (src.channels != 3) return src
-        val out = src.copy()
+        val out = src
         val r = out.data[0]; val g = out.data[1]; val b = out.data[2]
         for (i in 0 until out.size) {
             val m = (r[i] + b[i]) * 0.5f
@@ -98,7 +98,7 @@ object Processor {
             for (i in est.indices) est[i] = (est[i] * corr[i]).coerceIn(0f, 1f)
         }
         // a luminancia-arányt visszük át a csatornákra (színmegőrző)
-        val out = src.copy()
+        val out = src
         for (c in 0 until out.channels) { val a = out.data[c]; for (i in a.indices) { val f = if (lum[i] > eps) est[i] / lum[i] else 1f; a[i] = (a[i] * f.coerceIn(0f, 4f)).coerceIn(0f, 1f) } }
         return out
     }
@@ -107,7 +107,7 @@ object Processor {
     fun hdrCompress(src: FloatImage, amount: Float, radius: Int): FloatImage {
         val lum = src.toMono().data[0]
         val blur = boxBlur(lum, src.width, src.height, radius.coerceAtLeast(2))
-        val out = src.copy()
+        val out = src
         val k = amount * 3f
         for (c in 0 until out.channels) {
             val a = out.data[c]
@@ -129,7 +129,7 @@ object Processor {
      */
     fun starlessComposite(src: FloatImage, p: ProcessParams): FloatImage {
         val w = src.width; val h = src.height
-        val out = FloatImage(w, h, src.channels)
+        val out = src
         val r = p.starlessRadius.coerceIn(2, 12)
         for (c in 0 until src.channels) {
             val a = src.data[c]
@@ -153,7 +153,7 @@ object Processor {
     // ---------------------------------------------------------------- narrowband paletták (dual-band szűrős OSC képekhez)
     fun palette(src: FloatImage, mode: Palette, strength: Float): FloatImage {
         if (src.channels != 3) return src
-        val out = src.copy()
+        val out = src
         val r = out.data[0]; val g = out.data[1]; val b = out.data[2]
         for (i in 0 until out.size) {
             val ha = r[i]                       // dual-band OSC: R ≈ Hα, G+B ≈ OIII
@@ -278,7 +278,7 @@ object Processor {
     // ---------------------------------------------------------------- háttér (gradiens) kivonás
     /** Mintavételes polinomillesztés (1. vagy 2. fokú), 16×16 rács, cellánként alsó 20% medián. */
     fun backgroundExtraction(src: FloatImage, degree: Int): FloatImage {
-        val out = src.copy()
+        val out = src
         val w = src.width; val h = src.height
         val grid = 16
         for (c in 0 until src.channels) {
@@ -347,7 +347,7 @@ object Processor {
     // ---------------------------------------------------------------- színkalibráció
     fun neutralizeBackground(src: FloatImage): FloatImage {
         if (src.channels != 3) return src
-        val out = src.copy()
+        val out = src
         val meds = FloatArray(3) { median(out.data[it]) }
         val target = meds.average().toFloat()
         for (c in 0 until 3) { val a = out.data[c]; val d = target - meds[c]; for (i in a.indices) a[i] = (a[i] + d).coerceAtLeast(0f) }
@@ -357,7 +357,7 @@ object Processor {
     /** Fehéregyensúly a fényes (de nem telített) csillagokra: csatorna-átlagok kiegyenlítése. */
     fun whiteBalanceOnStars(src: FloatImage): FloatImage {
         if (src.channels != 3) return src
-        val out = src.copy()
+        val out = src
         val lum = src.toMono().data[0]
         val sorted = FloatArray(min(lum.size, 50000)) { lum[(it.toLong() * lum.size / min(lum.size, 50000)).toInt()] }
         sorted.sort()
@@ -372,7 +372,7 @@ object Processor {
 
     // ---------------------------------------------------------------- stretch
     fun stretch(src: FloatImage, p: ProcessParams): FloatImage {
-        val out = src.copy()
+        val out = src
         when (p.stretchMode) {
             StretchMode.NONE -> {
                 if (p.blackPoint > 0f) for (c in 0 until out.channels) { val a = out.data[c]; for (i in a.indices) a[i] = ((a[i] - p.blackPoint) / (1f - p.blackPoint)).coerceAtLeast(0f) }
@@ -422,7 +422,7 @@ object Processor {
     // ---------------------------------------------------------------- csillagcsökkentés
     /** Morfológiai nyitás (min majd max) adja a "csillagtalan" közelítést; a csillagokat ennek arányában keverjük vissza. */
     fun reduceStars(src: FloatImage, amount: Float, radius: Int): FloatImage {
-        val out = src.copy()
+        val out = src
         for (c in 0 until src.channels) {
             val a = src.data[c]
             val opened = maxFilter(minFilter(a, src.width, src.height, radius), src.width, src.height, radius)
@@ -459,13 +459,13 @@ object Processor {
     // ---------------------------------------------------------------- zajszűrés
     /** Élmegőrző (bilaterális jellegű) simítás, a sötét, zajos területeken erősebb. */
     fun denoise(src: FloatImage, amount: Float, radius: Int): FloatImage {
-        val out = src.copy()
+        val out = src   // helyben, csatornánkénti másolattal (export memóriacsúcs csökkentése)
         val w = src.width; val h = src.height
         val lum = src.toMono().data[0]
         val sigmaR = 0.02f + 0.12f * amount
         val inv2s = 1f / (2f * sigmaR * sigmaR)
         for (c in 0 until src.channels) {
-            val a = src.data[c]; val o = out.data[c]
+            val a = src.data[c].copyOf(); val o = out.data[c]
             hu.novaprocess.image.Par.rows(h) { y0, y1 ->
               for (y in y0 until y1) for (x in 0 until w) {
                 val i = y * w + x

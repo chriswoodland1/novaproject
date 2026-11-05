@@ -47,6 +47,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import hu.novaprocess.stack.FrameInfo
+import hu.novaprocess.stack.Resolution
 import hu.novaprocess.stack.StackMethod
 import hu.novaprocess.ui.theme.Dk
 import hu.novaprocess.vm.EditorViewModel
@@ -102,6 +103,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
             }
             items(frames, key = { it.uri.toString() }) { f -> FrameCell(f) { vm.toggleReject(f.uri) } }
             if (frames.isNotEmpty()) {
+                item(span = { GridItemSpan(4) }) { FwhmChart(frames) }
                 item(span = { GridItemSpan(4) }) {
                     Column(Modifier.padding(top = 10.dp)) {
                         Text("Felirat: FWHM px · piros keret = kizárt (automatikusan vagy érintésre) · érintés a visszavételhez",
@@ -125,7 +127,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                             StackMethod.MEAN -> "Átlag"; StackMethod.SIGMA_CLIP -> "Sigma-clip %.1f / %.1f".format(opts.sigmaLow, opts.sigmaHigh)
                             StackMethod.WINSORIZED -> "Winsorized %.1f / %.1f".format(opts.sigmaLow, opts.sigmaHigh) }) { sheet = "rej" }
                         RowItem("Igazítás", if (opts.alignFrames) "Csillag · forgatással" else "Ki") { sheet = "align" }
-                        RowItem("Felbontás", (if (opts.binning == 2) "2×2 binning" else "Teljes") + (if (opts.drizzle == 2) " · drizzle 2×" else "")) { sheet = "res" }
+                        RowItem("Felbontás", when (opts.resolution) { Resolution.AUTO -> "Auto (teljes, ha fér)"; Resolution.FULL -> "Teljes · sávos"; Resolution.BIN2 -> "2×2 binning" } + (if (opts.drizzle == 2) " · drizzle 2×" else "")) { sheet = "res" }
                     }
                 }
             }
@@ -198,9 +200,46 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                 }
                 "res" -> {
                     Text("Felbontás", style = MaterialTheme.typography.headlineMedium)
-                    CheckRow("2×2 binning (gyors, fele felbontás)", opts.binning == 2) { vm.stackOptions.value = opts.copy(binning = if (it) 2 else 1, drizzle = if (it) 1 else opts.drizzle) }
-                    CheckRow("Drizzle 2× (kétszeres kimenet, sok kockánál ad részletet; lassabb, 4× memória)", opts.drizzle == 2) { vm.stackOptions.value = opts.copy(drizzle = if (it) 2 else 1, binning = if (it) 1 else opts.binning) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Pill("Auto", opts.resolution == Resolution.AUTO) { vm.stackOptions.value = opts.copy(resolution = Resolution.AUTO, binning = 1) }
+                        Pill("Teljes (sávos)", opts.resolution == Resolution.FULL) { vm.stackOptions.value = opts.copy(resolution = Resolution.FULL, binning = 1, drizzle = 1) }
+                        Pill("2×2 binning", opts.resolution == Resolution.BIN2) { vm.stackOptions.value = opts.copy(resolution = Resolution.BIN2, binning = 2, drizzle = 1) }
+                    }
+                    Text("Teljes: a kimenet sávokban készül, a kalibráció a nyers Bayer-adaton fut – 8 MP-s kockáknál is elfér a memóriában, de lassabb (minden kocka sávonként újraolvasódik). Memóriakeret: ${hu.novaprocess.NovaApp.maxHeapMb()} MB.",
+                        style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                    CheckRow("Drizzle 2× (csak binningelt módban; sok kockánál ad részletet)", opts.drizzle == 2) { vm.stackOptions.value = opts.copy(drizzle = if (it) 2 else 1, resolution = if (it) Resolution.BIN2 else opts.resolution, binning = if (it) 2 else opts.binning) }
                 }
+            }
+        }
+    }
+}
+
+/** FWHM és csillagszám idősor a kockák sorrendjében; a kizártak pirossal. */
+@Composable
+private fun FwhmChart(frames: List<FrameInfo>) {
+    val cs = MaterialTheme.colorScheme
+    val valid = frames.filter { it.fwhm > 0f }
+    if (valid.size < 3) return
+    val maxF = valid.maxOf { it.fwhm }.coerceAtLeast(0.1f)
+    val med = valid.map { it.fwhm }.sorted()[valid.size / 2]
+    Column(Modifier.padding(top = 12.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("FWHM kockánként", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            Text("medián %.2f px · max %.2f".format(med, maxF), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        }
+        androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(64.dp).padding(top = 4.dp)) {
+            val n = frames.size
+            val stepX = size.width / n.coerceAtLeast(1)
+            // medián vonal
+            val ym = size.height - (med / maxF) * size.height
+            drawLine(cs.outline, androidx.compose.ui.geometry.Offset(0f, ym), androidx.compose.ui.geometry.Offset(size.width, ym), strokeWidth = 1f)
+            var prev: androidx.compose.ui.geometry.Offset? = null
+            frames.forEachIndexed { i, f ->
+                if (f.fwhm <= 0f) { prev = null; return@forEachIndexed }
+                val p = androidx.compose.ui.geometry.Offset(i * stepX + stepX / 2, size.height - (f.fwhm / maxF) * size.height)
+                prev?.let { drawLine(cs.onSurfaceVariant, it, p, strokeWidth = 1.5f) }
+                drawCircle(if (f.rejected) cs.error else cs.onSurface, radius = if (f.rejected) 4f else 2.5f, center = p)
+                prev = p
             }
         }
     }

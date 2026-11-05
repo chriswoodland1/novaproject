@@ -19,6 +19,55 @@ object FitsReader {
 
     fun read(input: InputStream): FloatImage = readWithHeader(input).first
 
+    /**
+     * Bayer FITS esetén a nyers mono síkot adja vissza (w, h, adatok 0..1), debayer nélkül –
+     * harmadannyi memória. Nem-Bayer esetén a kész képet.
+     */
+    fun readRawOrImage(input: InputStream): Triple<FloatImage?, Map<String, String>, Triple<Int, Int, FloatArray>?> {
+        val din = DataInputStream(input.buffered(1 shl 16))
+        val header = readHeader(din)
+        if (header.naxis == 2 && header.bayerPat != null) {
+            val w = header.naxis1; val h = header.naxis2
+            val plane = readPlane(din, header, w, h)
+            flipVertical(plane, w, h)
+            return Triple(null, header.cards, Triple(w, h, plane))
+        }
+        // visszaesés: teljes olvasás (a fejlécet már elolvastuk, ezért a maradékot dolgozzuk fel)
+        val planes = if (header.naxis >= 3) header.naxis3 else 1
+        val w = header.naxis1; val h = header.naxis2
+        val raw = Array(planes) { readPlane(din, header, w, h) }
+        for (p in raw) flipVertical(p, w, h)
+        val img = if (planes >= 3) FloatImage(w, h, 3).also { img -> for (c in 0 until 3) System.arraycopy(raw[c], 0, img.data[c], 0, w * h) }
+                  else FloatImage(w, h, 1).also { System.arraycopy(raw[0], 0, it.data[0], 0, w * h) }
+        return Triple(img, header.cards, null)
+    }
+
+    /** Egy sík beolvasása és 0..1-re normalizálása (BZERO/BSCALE alkalmazva). */
+    private fun readPlane(din: DataInputStream, header: Header, w: Int, h: Int): FloatArray {
+        val bytesPerPx = kotlin.math.abs(header.bitpix) / 8
+        val dst = FloatArray(w * h)
+        val scale = header.bscale.toFloat(); val zero = header.bzero.toFloat()
+        val maxVal = when (header.bitpix) { 8 -> 255f; 16 -> 65535f; 32 -> 4294967295f; else -> 1f }
+        val rowBytes = ByteArray(w * bytesPerPx)
+        val bb = ByteBuffer.wrap(rowBytes).order(ByteOrder.BIG_ENDIAN)
+        var fmax = 0f
+        for (y in 0 until h) {
+            din.readFully(rowBytes)
+            val base = y * w
+            when (header.bitpix) {
+                8 -> for (x in 0 until w) dst[base + x] = (rowBytes[x].toInt() and 0xFF).toFloat()
+                16 -> for (x in 0 until w) dst[base + x] = bb.getShort(x * 2).toFloat()
+                32 -> for (x in 0 until w) dst[base + x] = bb.getInt(x * 4).toFloat()
+                -32 -> for (x in 0 until w) { val v = bb.getFloat(x * 4); dst[base + x] = v; if (v > fmax) fmax = v }
+                -64 -> for (x in 0 until w) { val v = bb.getDouble(x * 8).toFloat(); dst[base + x] = v; if (v > fmax) fmax = v }
+                else -> throw IllegalArgumentException("Nem támogatott BITPIX: ${header.bitpix}")
+            }
+        }
+        val m = if (header.bitpix < 0) (if (fmax > 0f) fmax else 1f) else maxVal
+        for (i in dst.indices) dst[i] = ((dst[i] * scale + zero) / m).coerceIn(0f, 1f)
+        return dst
+    }
+
     /** Kép + fejléc kulcsok (OBJECT, EXPTIME, DATE-OBS, RA, DEC, INSTRUME …). */
     fun readWithHeader(input: InputStream): Pair<FloatImage, Map<String, String>> {
         val din = DataInputStream(input.buffered(1 shl 16))
@@ -124,6 +173,35 @@ object FitsReader {
             else if (ch == '/' && !inStr) return i
         }
         return -1
+    }
+
+    /** Bilineáris debayer csak a [y0,y1) sorokra; a kimenet magassága y1-y0. */
+    fun debayerRegion(src: FloatArray, w: Int, h: Int, pattern: String, y0: Int, y1: Int): FloatImage {
+        val out = FloatImage(w, y1 - y0, 3)
+        val chAt = Array(2) { IntArray(2) }
+        for (i in 0 until 4) { val c = when (pattern[i]) { 'R' -> 0; 'G' -> 1; else -> 2 }; chAt[i / 2][i % 2] = c }
+        Par.rows(y1 - y0) { r0, r1 ->
+          for (ry in r0 until r1) {
+            val y = ry + y0
+            val ym = (y - 1).coerceAtLeast(0); val yp = (y + 1).coerceAtMost(h - 1)
+            for (x in 0 until w) {
+                val xm = (x - 1).coerceAtLeast(0); val xp = (x + 1).coerceAtMost(w - 1)
+                val own = chAt[y and 1][x and 1]
+                val v = src[y * w + x]
+                val o = ry * w + x
+                out.data[own][o] = v
+                for (c in 0 until 3) {
+                    if (c == own) continue
+                    var sum = 0f; var n = 0
+                    if (chAt[y and 1][(x + 1) and 1] == c) { sum += src[y * w + xm] + src[y * w + xp]; n += 2 }
+                    if (chAt[(y + 1) and 1][x and 1] == c) { sum += src[ym * w + x] + src[yp * w + x]; n += 2 }
+                    if (n == 0 && chAt[(y + 1) and 1][(x + 1) and 1] == c) { sum += src[ym * w + xm] + src[ym * w + xp] + src[yp * w + xm] + src[yp * w + xp]; n += 4 }
+                    out.data[c][o] = if (n > 0) sum / n else v
+                }
+            }
+          }
+        }
+        return out
     }
 
     /** Bilineáris debayer. pattern: a bal felső 2×2 blokk sorrendje, pl. "GRBG". */
