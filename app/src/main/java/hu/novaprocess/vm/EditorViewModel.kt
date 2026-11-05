@@ -10,6 +10,9 @@ import hu.novaprocess.image.FloatImage
 import hu.novaprocess.image.ImageLoader
 import hu.novaprocess.image.TiffWriter
 import hu.novaprocess.library.Library
+import hu.novaprocess.planetary.Planetary
+import hu.novaprocess.planetary.PlanetaryOptions
+import hu.novaprocess.planetary.PlanetaryProgress
 import hu.novaprocess.library.LibraryEntry
 import hu.novaprocess.process.Presets
 import java.io.File
@@ -33,7 +36,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
-enum class ExportFormat { JPEG, PNG, TIFF16 }
+enum class ExportFormat { JPEG, PNG, TIFF16, FRAMED_JPEG }
 
 data class StackUiState(
     val running: Boolean = false,
@@ -123,13 +126,15 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 setSource(res.image, "Stack · ${res.used} kocka · ${res.image.width}×${res.image.height}")
                 stackState.update { it.copy(running = false, log = res.log) }
+                captionFromFrames(res.used)
                 // könyvtárba: 16 bites TIFF + miniatűr
                 launch(Dispatchers.IO) {
                     runCatching {
                         val thumb = Processor.process(res.image.downscale(320), ProcessParams()).toBitmap()
-                        val title = frames.value.firstOrNull()?.name?.substringBefore("_sub")?.substringBefore("-sub")?.substringBeforeLast('.') ?: "Stack"
-                        val entry = Library.saveStack(getApplication<Application>(), res.image, thumb, title, res.used, 0, ProcessParams())
+                        val cap = caption.value
+                        val entry = Library.saveStack(getApplication<Application>(), res.image, thumb, cap.title, res.used, (res.used * cap.exposure).toInt(), ProcessParams())
                         currentEntryId = entry.id
+                        libraryVersion.value++
                     }
                 }
             } catch (e: Exception) {
@@ -148,6 +153,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 val name = ImageLoader.displayName(getApplication<Application>(), uri)
                 val img = withContext(Dispatchers.IO) { ImageLoader.load(getApplication<Application>(), uri, name) }
                 setSource(img, "$name · ${img.width}×${img.height}")
+                caption.value = Caption(title = name.substringBeforeLast('.'), date = java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date()))
                 launch(Dispatchers.IO) {
                     runCatching {
                         val thumb = Processor.process(img.downscale(320), ProcessParams()).toBitmap()
@@ -159,6 +165,52 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    // ---------------------------------------------------------------- felirat-adatok (keretes exporthoz)
+    data class Caption(var title: String = "", var date: String = "", var frames: Int = 0, var exposure: Float = 0f, var instrument: String = "Seestar S30 Pro")
+    val caption = MutableStateFlow(Caption())
+
+    private fun captionFromFrames(used: Int) {
+        val fs = frames.value.filter { !it.rejected }
+        val first = fs.firstOrNull()
+        caption.value = Caption(
+            title = first?.objectName ?: first?.name?.substringBefore("_sub")?.substringBefore("-sub")?.substringBeforeLast('.') ?: "Stack",
+            date = first?.dateObs?.take(10)?.replace('-', '.') ?: java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date()),
+            frames = used, exposure = first?.exposure ?: 0f
+        )
+    }
+
+    // ---------------------------------------------------------------- bolygó / Hold (lucky imaging)
+    val planetaryOptions = MutableStateFlow(PlanetaryOptions())
+    val planetaryProgress = MutableStateFlow<PlanetaryProgress?>(null)
+    val planetaryError = MutableStateFlow<String?>(null)
+    val planetaryRunning = MutableStateFlow(false)
+    private var planetaryJob: Job? = null
+
+    fun startPlanetary(video: Uri?, images: List<Uri>) {
+        if (planetaryRunning.value) return
+        planetaryJob = viewModelScope.launch {
+            planetaryRunning.value = true; planetaryError.value = null
+            try {
+                val res = if (video != null) Planetary.stackVideo(getApplication<Application>(), video, planetaryOptions.value) { planetaryProgress.value = it }
+                           else Planetary.stackImages(getApplication<Application>(), images, planetaryOptions.value) { planetaryProgress.value = it }
+                setSource(res.image, "Bolygó stack · ${res.used}/${res.total} kocka · ${res.image.width}×${res.image.height}")
+                // bolygóhoz a lineáris megjelenítés + wavelet a kiindulás
+                params.value = ProcessParams(stretchMode = hu.novaprocess.process.StretchMode.NONE, wavelet1 = 0.8f, wavelet2 = 0.6f, waveletDenoise = 0.2f)
+                caption.value = Caption(title = "Bolygó / Hold", date = java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date()), frames = res.used)
+                schedulePreview(immediate = true)
+                launch(Dispatchers.IO) {
+                    runCatching {
+                        val thumb = Processor.process(res.image.downscale(320), params.value).toBitmap()
+                        currentEntryId = Library.saveStack(getApplication<Application>(), res.image, thumb, "Bolygó/Hold stack", res.used, 0, params.value).id
+                        libraryVersion.value++
+                    }
+                }
+            } catch (e: Exception) { planetaryError.value = e.message ?: e.toString() }
+            planetaryRunning.value = false; planetaryProgress.value = null
+        }
+    }
+    fun cancelPlanetary() { planetaryJob?.cancel(); planetaryRunning.value = false; planetaryProgress.value = null }
 
     // ---------------------------------------------------------------- könyvtár
     private var currentEntryId: String? = null
@@ -277,6 +329,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                             ExportFormat.TIFF16 -> TiffWriter.write(out, os)
                             ExportFormat.PNG -> out.toBitmap().compress(Bitmap.CompressFormat.PNG, 100, os)
                             ExportFormat.JPEG -> out.toBitmap().compress(Bitmap.CompressFormat.JPEG, quality, os)
+                            ExportFormat.FRAMED_JPEG -> framed(out.toBitmap()).compress(Bitmap.CompressFormat.JPEG, quality, os)
                         }
                     }
                 }
@@ -286,6 +339,28 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(exporting = false, message = "Export hiba: ${e.message}") }
             }
         }
+    }
+
+    /** Fekete keret + felirat: objektum · dátum · kockák × expozíció = integráció · eszköz · NovaProcess. */
+    private fun framed(src: Bitmap): Bitmap {
+        val cap = caption.value
+        val margin = (src.width * 0.04f).toInt().coerceAtLeast(24)
+        val bar = (src.width * 0.09f).toInt().coerceAtLeast(70)
+        val out = Bitmap.createBitmap(src.width + 2 * margin, src.height + margin + bar, Bitmap.Config.ARGB_8888)
+        val cv = android.graphics.Canvas(out)
+        cv.drawColor(android.graphics.Color.BLACK)
+        cv.drawBitmap(src, margin.toFloat(), margin.toFloat(), null)
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE; textSize = bar * 0.32f; typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL) }
+        val sub = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.rgb(154, 154, 154); textSize = bar * 0.22f }
+        val integ = if (cap.frames > 0 && cap.exposure > 0f) {
+            val tot = cap.frames * cap.exposure
+            "${cap.frames} × ${"%.0f".format(cap.exposure)} s = " + (if (tot >= 3600) "%.1f óra".format(tot / 3600) else "%.0f perc".format(tot / 60))
+        } else if (cap.frames > 0) "${cap.frames} kocka" else ""
+        val line2 = listOf(cap.date, integ, cap.instrument, "NovaProcess").filter { it.isNotBlank() }.joinToString("  ·  ")
+        val y1 = src.height + margin + bar * 0.45f
+        cv.drawText(cap.title.ifBlank { "Asztrofotó" }, margin.toFloat(), y1, paint)
+        cv.drawText(line2, margin.toFloat(), y1 + bar * 0.32f, sub)
+        return out
     }
 
     fun clearMessage() { _ui.update { it.copy(message = null) } }

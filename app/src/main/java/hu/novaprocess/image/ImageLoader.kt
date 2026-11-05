@@ -22,7 +22,26 @@ object ImageLoader {
         return n.endsWith(".fit") || n.endsWith(".fits") || n.endsWith(".fts")
     }
 
-    /** Betölt egy FITS / JPEG / PNG / WebP képet lineáris FloatImage-ként. */
+    data class Meta(val objectName: String?, val exposure: Float?, val dateObs: String?, val ra: String?, val dec: String?, val instrument: String?)
+
+    fun metaOf(cards: Map<String, String>): Meta = Meta(
+        cards["OBJECT"]?.takeIf { it.isNotBlank() }, cards["EXPTIME"]?.toFloatOrNull() ?: cards["EXPOSURE"]?.toFloatOrNull(),
+        cards["DATE-OBS"], cards["RA"] ?: cards["OBJCTRA"], cards["DEC"] ?: cards["OBJCTDEC"], cards["INSTRUME"] ?: cards["TELESCOP"]
+    )
+
+    /** Betölt egy képet, FITS esetén a fejléc-metaadatokkal együtt. */
+    fun loadWithMeta(context: Context, uri: Uri, name: String = displayName(context, uri)): Pair<FloatImage, Meta?> {
+        if (isFits(name)) {
+            context.contentResolver.openInputStream(uri).use { ins ->
+                requireNotNull(ins) { "Nem nyitható: $name" }
+                val (img, cards) = FitsReader.readWithHeader(ins)
+                return Pair(img, metaOf(cards))
+            }
+        }
+        return Pair(load(context, uri, name), null)
+    }
+
+    /** Betölt egy FITS / JPEG / PNG / WebP / TIFF képet lineáris FloatImage-ként. */
     fun load(context: Context, uri: Uri, name: String = displayName(context, uri)): FloatImage {
         val cr = context.contentResolver
         if (isFits(name)) {

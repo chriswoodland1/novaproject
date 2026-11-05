@@ -33,6 +33,7 @@ object Processor {
         if (p.starless) img = starlessComposite(img, p)
         else if (p.starReduction > 0f) img = reduceStars(img, p.starReduction, p.starRadius)
         if (p.denoise > 0f) img = denoise(img, p.denoise, p.denoiseRadius)
+        if (p.wavelet1 != 0f || p.wavelet2 != 0f || p.wavelet3 != 0f || p.waveletDenoise > 0f) img = wavelets(img, p)
         // --- görbék + fotós beállítások, opcionális maszkkal ---
         val base = if (p.maskMode != MaskMode.NONE) img.copy() else null
         if (p.curveShadows != 0f || p.curveMidtones != 0f || p.curveHighlights != 0f) img = curves(img, p)
@@ -40,6 +41,27 @@ object Processor {
         if (base != null) img = blendByMask(base, img, p)
         img.clampInPlace()
         return img
+    }
+
+    // ---------------------------------------------------------------- wavelet (à trous) élesítés, 3 réteg
+    fun wavelets(src: FloatImage, p: ProcessParams): FloatImage {
+        val w = src.width; val h = src.height
+        val lum = src.toMono().data[0]
+        val b1 = boxBlur(lum, w, h, 1)
+        val b2 = boxBlur(b1, w, h, 2)
+        val b3 = boxBlur(b2, w, h, 4)
+        val gains = floatArrayOf(p.wavelet1, p.wavelet2, p.wavelet3)
+        val thr = p.waveletDenoise * 0.02f
+        val detail = FloatArray(lum.size)
+        for (i in lum.indices) {
+            var d1 = lum[i] - b1[i]
+            if (thr > 0f) d1 = if (abs(d1) < thr) 0f else d1 - Math.signum(d1) * thr   // soft threshold a finom rétegen
+            val d2 = b1[i] - b2[i]; val d3 = b2[i] - b3[i]
+            detail[i] = d1 * gains[0] + d2 * gains[1] + d3 * gains[2] + (if (thr > 0f) (d1 - (lum[i] - b1[i])) else 0f)
+        }
+        val out = src.copy()
+        for (c in 0 until out.channels) { val a = out.data[c]; for (i in a.indices) a[i] = (a[i] + detail[i]).coerceIn(0f, 1f) }
+        return out
     }
 
     // ---------------------------------------------------------------- SCNR (zöld-elnyomás, average neutral)

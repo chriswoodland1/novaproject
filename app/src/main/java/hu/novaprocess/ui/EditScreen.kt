@@ -146,7 +146,11 @@ private val CATEGORIES: List<Pair<String, List<Tool>>> = listOf(
         Tool("dnr", "Zajszűrés sugár", 1f, 4f, { "%.0f".format(it) }, get = { it.denoiseRadius.toFloat() }, set = { p, v -> p.copy(denoiseRadius = v.toInt()) }),
         Tool("clar", "Clarity", -1f, 1f, get = { it.clarity }, set = { p, v -> p.copy(clarity = v) }),
         Tool("dehaze", "Dehaze", 0f, 1f, get = { it.dehaze }, set = { p, v -> p.copy(dehaze = v) }),
-        Tool("sharp", "Élesítés", 0f, 1f, get = { it.sharpen }, set = { p, v -> p.copy(sharpen = v) })
+        Tool("sharp", "Élesítés", 0f, 1f, get = { it.sharpen }, set = { p, v -> p.copy(sharpen = v) }),
+        Tool("w1", "Wavelet · finom (1 px)", 0f, 3f, get = { it.wavelet1 }, set = { p, v -> p.copy(wavelet1 = v) }),
+        Tool("w2", "Wavelet · közepes (2 px)", 0f, 3f, get = { it.wavelet2 }, set = { p, v -> p.copy(wavelet2 = v) }),
+        Tool("w3", "Wavelet · durva (4 px)", 0f, 3f, get = { it.wavelet3 }, set = { p, v -> p.copy(wavelet3 = v) }),
+        Tool("wd", "Wavelet zajküszöb", 0f, 1f, get = { it.waveletDenoise }, set = { p, v -> p.copy(waveletDenoise = v) })
     ),
     "Geometria" to listOf(
         Tool("rot", "Forgatás", get = { it.rotation.ordinal.toFloat() }, set = { p, v -> p.copy(rotation = Rotation.values()[v.toInt()]) },
@@ -309,8 +313,9 @@ private fun PresetSheet(vm: EditorViewModel, onClose: () -> Unit) {
 private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onClose: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     var format by remember { mutableStateOf(ExportFormat.JPEG) }
-    val mime = when (format) { ExportFormat.JPEG -> "image/jpeg"; ExportFormat.PNG -> "image/png"; ExportFormat.TIFF16 -> "image/tiff" }
-    val ext = when (format) { ExportFormat.JPEG -> "jpg"; ExportFormat.PNG -> "png"; ExportFormat.TIFF16 -> "tif" }
+    val mime = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG -> "image/jpeg"; ExportFormat.PNG -> "image/png"; ExportFormat.TIFF16 -> "image/tiff" }
+    val ext = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG -> "jpg"; ExportFormat.PNG -> "png"; ExportFormat.TIFF16 -> "tif" }
+    val cap by vm.caption.collectAsState()
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(mime)) { uri -> if (uri != null) { vm.export(uri, format); onClose() } }
     ModalBottomSheet(onDismissRequest = onClose, containerColor = cs.surface) {
         Column(Modifier.padding(20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -319,6 +324,18 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onClose: () -> 
                 Pill("JPEG", format == ExportFormat.JPEG) { format = ExportFormat.JPEG }
                 Pill("PNG", format == ExportFormat.PNG) { format = ExportFormat.PNG }
                 Pill("TIFF 16 bit", format == ExportFormat.TIFF16) { format = ExportFormat.TIFF16 }
+                Pill("Keretes JPEG", format == ExportFormat.FRAMED_JPEG) { format = ExportFormat.FRAMED_JPEG }
+            }
+            if (format == ExportFormat.FRAMED_JPEG) {
+                androidx.compose.material3.OutlinedTextField(value = cap.title, onValueChange = { vm.caption.value = cap.copy(title = it) }, label = { Text("Objektum") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.OutlinedTextField(value = cap.date, onValueChange = { vm.caption.value = cap.copy(date = it) }, label = { Text("Dátum") }, singleLine = true, modifier = Modifier.weight(1f))
+                    androidx.compose.material3.OutlinedTextField(value = cap.instrument, onValueChange = { vm.caption.value = cap.copy(instrument = it) }, label = { Text("Eszköz") }, singleLine = true, modifier = Modifier.weight(1f))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.OutlinedTextField(value = if (cap.frames > 0) cap.frames.toString() else "", onValueChange = { vm.caption.value = cap.copy(frames = it.toIntOrNull() ?: 0) }, label = { Text("Kockák") }, singleLine = true, modifier = Modifier.weight(1f))
+                    androidx.compose.material3.OutlinedTextField(value = if (cap.exposure > 0f) "%.0f".format(cap.exposure) else "", onValueChange = { vm.caption.value = cap.copy(exposure = it.toFloatOrNull() ?: 0f) }, label = { Text("Expozíció (s)") }, singleLine = true, modifier = Modifier.weight(1f))
+                }
             }
             Text("A teljes felbontású képre fut le minden beállítás; nagy stacknél ez több tíz másodperc.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             androidx.compose.material3.Button(onClick = { save.launch("novaprocess_${System.currentTimeMillis()}.$ext") }, enabled = !exporting, modifier = Modifier.fillMaxWidth().height(52.dp), shape = CircleShape) {

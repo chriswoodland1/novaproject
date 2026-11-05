@@ -17,7 +17,10 @@ object FitsReader {
         val bzero: Double, val bscale: Double, val bayerPat: String?, val cards: Map<String, String>
     )
 
-    fun read(input: InputStream): FloatImage {
+    fun read(input: InputStream): FloatImage = readWithHeader(input).first
+
+    /** Kép + fejléc kulcsok (OBJECT, EXPTIME, DATE-OBS, RA, DEC, INSTRUME …). */
+    fun readWithHeader(input: InputStream): Pair<FloatImage, Map<String, String>> {
         val din = DataInputStream(input.buffered(1 shl 16))
         val header = readHeader(din)
         val w = header.naxis1; val h = header.naxis2
@@ -60,13 +63,14 @@ object FitsReader {
         // FITS: az első sor a kép ALJA → függőleges tükrözés
         for (p in raw) flipVertical(p, w, h)
 
-        return when {
+        val img = when {
             planes >= 3 -> FloatImage(w, h, 3).also { img ->
                 for (c in 0 until 3) System.arraycopy(raw[c], 0, img.data[c], 0, w * h)
             }
             header.bayerPat != null -> debayer(raw[0], w, h, header.bayerPat)
             else -> FloatImage(w, h, 1).also { System.arraycopy(raw[0], 0, it.data[0], 0, w * h) }
         }
+        return Pair(img, header.cards)
     }
 
     private fun flipVertical(a: FloatArray, w: Int, h: Int) {

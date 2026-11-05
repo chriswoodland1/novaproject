@@ -19,7 +19,10 @@ data class FrameInfo(
     val eccentricity: Float,  // 0 = kerek, 1 = vonal (elhúzott)
     val thumb: Bitmap?,
     val rejected: Boolean = false,
-    val reason: String = ""
+    val reason: String = "",
+    val objectName: String? = null,
+    val exposure: Float? = null,
+    val dateObs: String? = null
 )
 
 /**
@@ -30,7 +33,7 @@ object FrameAnalyzer {
 
     fun analyze(context: Context, uri: Uri, analysisSide: Int = 1000, thumbSide: Int = 220): FrameInfo {
         val name = ImageLoader.displayName(context, uri)
-        val full = ImageLoader.load(context, uri, name)
+        val (full, meta) = ImageLoader.loadWithMeta(context, uri, name)
         val scaleDown = maxOf(full.width, full.height).toFloat() / analysisSide
         val small = full.downscale(analysisSide)
         val mono = small.toMono()
@@ -66,7 +69,7 @@ object FrameAnalyzer {
             Processor.process(t, ProcessParams()).toBitmap()
         } catch (e: Exception) { null }
 
-        return FrameInfo(uri, name, fwhm, stars.size, bg, ecc, thumb)
+        return FrameInfo(uri, name, fwhm, stars.size, bg, ecc, thumb, objectName = meta?.objectName, exposure = meta?.exposure, dateObs = meta?.dateObs)
     }
 
     /** Automatikus kizárás a kockák mediánjához képest. */

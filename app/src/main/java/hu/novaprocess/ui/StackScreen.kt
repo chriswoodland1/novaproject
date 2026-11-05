@@ -62,6 +62,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     var sheet by remember { mutableStateOf<String?>(null) }
     var showSeestar by remember { mutableStateOf(false) }
+    var showPlanetary by remember { mutableStateOf(false) }
 
     val pickLights = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) {
@@ -95,6 +96,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                     Text("Válaszd ki a Seestar _sub FITS kockáit vagy JPEG/PNG sorozatot.", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     Button(onClick = { pickLights.launch(MIMES) }) { Text("Kockák hozzáadása") }
                     OutlinedButton(onClick = { showSeestar = true }) { Text("Tallózás a Seestar-on (Wi-Fi)") }
+                    OutlinedButton(onClick = { showPlanetary = true }) { Text("Bolygó / Hold videóból") }
                     TextButton(onClick = { pickSingle.launch(MIMES) }) { Text("Egyetlen kész kép megnyitása") }
                 }
             }
@@ -158,6 +160,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
         }
     }
 
+    if (showPlanetary) PlanetarySheet(vm, onDone = onOpenEditor, onClose = { showPlanetary = false })
     if (showSeestar) SeestarSheet(onPicked = { vm.addFrames(it) }, onClose = { showSeestar = false })
 
     if (sheet != null) ModalBottomSheet(onDismissRequest = { sheet = null }, containerColor = cs.surface) {

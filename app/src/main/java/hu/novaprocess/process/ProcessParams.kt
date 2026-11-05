@@ -47,6 +47,12 @@ data class ProcessParams(
     val maskLow: Float = 0.2f, val maskHigh: Float = 0.8f, val maskFeather: Float = 0.1f,
     val maskInvert: Boolean = false,
 
+    // --- 1.4: wavelet élesítés (bolygó/Hold, de DSO-ra is) ---
+    val wavelet1: Float = 0f,                 // finom (1 px) réteg erősítés 0..3
+    val wavelet2: Float = 0f,                 // 2 px
+    val wavelet3: Float = 0f,                 // 4 px
+    val waveletDenoise: Float = 0f,           // finom réteg zajküszöb 0..1
+
     // --- Fotó (nemlineáris térben, Lightroom-szerű) ---
     val exposure: Float = 0f,                 // EV, -3..3
     val contrast: Float = 0f,                 // -1..1

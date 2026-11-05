@@ -28,6 +28,13 @@ pedig a GitHub Releases-ből frissíti önmagát (engedély után).
 
 **Export**: JPEG, PNG, 16 bites TIFF (teljes felbontáson).
 
+**1.1–1.4 csomagok**
+- Darkroom felület, éjszakai (vörös) mód, undo/redo, nyomva tartásra „előtte”
+- Kocka-minősítés (FWHM, csillagszám, elliptikusság) és automatikus kizárás; medián mesterkockák; hot pixel javítás; drizzle 2×; többszálú feldolgozás
+- SCNR, Richardson–Lucy dekonvolúció, HDR magkompresszió, csillagtalanítás külön rétegre (köd kiemelés, csillagok visszakeverése), HOO / SHO-szerű / Foraxx paletta, görbék, luminancia- és tartomány-maszk
+- Presetek (beépített + saját), recept JSON export/import, könyvtár (minden stack 16 bites TIFF-ként mentve, újranyitható a receptjével), Seestar SMB tallózás
+- Bolygó / Hold / Nap lucky imaging videóból vagy képsorozatból, wavelet élesítés, keretes export felirattal (objektum, dátum, integráció)
+
 ## Első beüzemelés (egyszer)
 
 1. Hozz létre egy GitHub repót (pl. `novaprocess`), és told fel ezt a mappát.
