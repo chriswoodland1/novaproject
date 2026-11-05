@@ -3,28 +3,38 @@ package hu.novaprocess.ui
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Compare
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,9 +48,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -50,197 +60,191 @@ import androidx.compose.ui.unit.dp
 import hu.novaprocess.process.ProcessParams
 import hu.novaprocess.process.Rotation
 import hu.novaprocess.process.StretchMode
+import hu.novaprocess.ui.theme.LocalNightMode
 import hu.novaprocess.vm.EditorViewModel
 import hu.novaprocess.vm.ExportFormat
 
+/** Egy eszköz: név + hogyan olvassa/írja a paramétert. Csúszka vagy kapcsoló/választó. */
+private data class Tool(
+    val id: String, val label: String,
+    val min: Float = 0f, val max: Float = 1f,
+    val fmt: (Float) -> String = { "%.2f".format(it) },
+    val get: (ProcessParams) -> Float, val set: (ProcessParams, Float) -> ProcessParams,
+    val options: List<Pair<String, Float>>? = null   // ha nem null: választó gombok csúszka helyett
+)
+
+private val CATEGORIES: List<Pair<String, List<Tool>>> = listOf(
+    "Fény" to listOf(
+        Tool("exposure", "Expozíció (EV)", -3f, 3f, get = { it.exposure }, set = { p, v -> p.copy(exposure = v) }),
+        Tool("contrast", "Kontraszt", -1f, 1f, get = { it.contrast }, set = { p, v -> p.copy(contrast = v) }),
+        Tool("highlights", "Csúcsfények", -1f, 1f, get = { it.highlights }, set = { p, v -> p.copy(highlights = v) }),
+        Tool("shadows", "Árnyékok", -1f, 1f, get = { it.shadows }, set = { p, v -> p.copy(shadows = v) }),
+        Tool("whites", "Fehérek", -1f, 1f, get = { it.whites }, set = { p, v -> p.copy(whites = v) }),
+        Tool("blacks", "Feketék", -1f, 1f, get = { it.blacks }, set = { p, v -> p.copy(blacks = v) }),
+        Tool("gamma", "Gamma", 0.5f, 2f, get = { it.gamma }, set = { p, v -> p.copy(gamma = v) }),
+        Tool("lb", "Szintek · fekete", 0f, 0.5f, get = { it.levelsBlack }, set = { p, v -> p.copy(levelsBlack = v) }),
+        Tool("lw", "Szintek · fehér", 0.5f, 1f, get = { it.levelsWhite }, set = { p, v -> p.copy(levelsWhite = v) })
+    ),
+    "Szín" to listOf(
+        Tool("temp", "Hőmérséklet", -1f, 1f, get = { it.temperature }, set = { p, v -> p.copy(temperature = v) }),
+        Tool("tint", "Árnyalat", -1f, 1f, get = { it.tint }, set = { p, v -> p.copy(tint = v) }),
+        Tool("sat", "Telítettség", -1f, 1f, get = { it.saturation }, set = { p, v -> p.copy(saturation = v) }),
+        Tool("vib", "Vibrance", -1f, 1f, get = { it.vibrance }, set = { p, v -> p.copy(vibrance = v) }),
+        Tool("r", "Vörös", -0.5f, 0.5f, get = { it.redBalance }, set = { p, v -> p.copy(redBalance = v) }),
+        Tool("g", "Zöld", -0.5f, 0.5f, get = { it.greenBalance }, set = { p, v -> p.copy(greenBalance = v) }),
+        Tool("b", "Kék", -0.5f, 0.5f, get = { it.blueBalance }, set = { p, v -> p.copy(blueBalance = v) }),
+        Tool("bgn", "Háttér semlegesítés", get = { if (it.backgroundNeutralize) 1f else 0f }, set = { p, v -> p.copy(backgroundNeutralize = v > 0.5f) }, options = listOf("Ki" to 0f, "Be" to 1f)),
+        Tool("wb", "Fehéregyensúly csillagokra", get = { if (it.whiteBalanceStars) 1f else 0f }, set = { p, v -> p.copy(whiteBalanceStars = v > 0.5f) }, options = listOf("Ki" to 0f, "Be" to 1f))
+    ),
+    "Asztro" to listOf(
+        Tool("stretch", "Stretch módja", get = { it.stretchMode.ordinal.toFloat() }, set = { p, v -> p.copy(stretchMode = StretchMode.values()[v.toInt()]) },
+            options = listOf("Nincs" to 0f, "Auto" to 1f, "Asinh" to 2f, "MTF" to 3f)),
+        Tool("target", "Cél háttér (Auto/MTF)", 0.05f, 0.6f, get = { it.mtfMidtones }, set = { p, v -> p.copy(mtfMidtones = v) }),
+        Tool("clip", "Árnyék vágás (MAD×)", 0f, 5f, { "%.1f".format(it) }, get = { it.mtfShadowClip }, set = { p, v -> p.copy(mtfShadowClip = v) }),
+        Tool("asinh", "Asinh erősség", 1f, 1000f, { "%.0f".format(it) }, get = { it.asinhStrength }, set = { p, v -> p.copy(asinhStrength = v) }),
+        Tool("bp", "Feketepont", 0f, 0.3f, { "%.3f".format(it) }, get = { it.blackPoint }, set = { p, v -> p.copy(blackPoint = v) }),
+        Tool("bge", "Háttér-gradiens kivonás", get = { if (!it.backgroundExtraction) 0f else it.backgroundDegree.toFloat() },
+            set = { p, v -> p.copy(backgroundExtraction = v > 0f, backgroundDegree = if (v > 0f) v.toInt() else p.backgroundDegree) },
+            options = listOf("Ki" to 0f, "Sík" to 1f, "Másodfokú" to 2f))
+    ),
+    "Csillag" to listOf(
+        Tool("sr", "Csillagcsökkentés", 0f, 1f, get = { it.starReduction }, set = { p, v -> p.copy(starReduction = v) }),
+        Tool("srr", "Csillag sugár (px)", 1f, 5f, { "%.0f".format(it) }, get = { it.starRadius.toFloat() }, set = { p, v -> p.copy(starRadius = v.toInt()) })
+    ),
+    "Részlet" to listOf(
+        Tool("dn", "Zajszűrés", 0f, 1f, get = { it.denoise }, set = { p, v -> p.copy(denoise = v) }),
+        Tool("dnr", "Zajszűrés sugár", 1f, 4f, { "%.0f".format(it) }, get = { it.denoiseRadius.toFloat() }, set = { p, v -> p.copy(denoiseRadius = v.toInt()) }),
+        Tool("clar", "Clarity", -1f, 1f, get = { it.clarity }, set = { p, v -> p.copy(clarity = v) }),
+        Tool("dehaze", "Dehaze", 0f, 1f, get = { it.dehaze }, set = { p, v -> p.copy(dehaze = v) }),
+        Tool("sharp", "Élesítés", 0f, 1f, get = { it.sharpen }, set = { p, v -> p.copy(sharpen = v) })
+    ),
+    "Geometria" to listOf(
+        Tool("rot", "Forgatás", get = { it.rotation.ordinal.toFloat() }, set = { p, v -> p.copy(rotation = Rotation.values()[v.toInt()]) },
+            options = listOf("0°" to 0f, "90°" to 1f, "180°" to 2f, "270°" to 3f)),
+        Tool("flip", "Tükrözés", get = { if (it.flipH) 1f else 0f }, set = { p, v -> p.copy(flipH = v > 0.5f) }, options = listOf("Ki" to 0f, "Vízszintes" to 1f)),
+        Tool("cl", "Vágás · bal", 0f, 0.45f, get = { it.cropLeft }, set = { p, v -> p.copy(cropLeft = v) }),
+        Tool("ct", "Vágás · felső", 0f, 0.45f, get = { it.cropTop }, set = { p, v -> p.copy(cropTop = v) }),
+        Tool("cr", "Vágás · jobb", 0.55f, 1f, get = { it.cropRight }, set = { p, v -> p.copy(cropRight = v) }),
+        Tool("cb", "Vágás · alsó", 0.55f, 1f, get = { it.cropBottom }, set = { p, v -> p.copy(cropBottom = v) })
+    )
+)
+
 @Composable
-fun EditScreen(vm: EditorViewModel) {
+fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val ui by vm.ui.collectAsState()
     val p by vm.params.collectAsState()
-    var tab by remember { mutableIntStateOf(0) }
-    var exportFormat by remember { mutableStateOf(ExportFormat.JPEG) }
+    val cs = MaterialTheme.colorScheme
+    val night = LocalNightMode.current
+    var cat by remember { mutableIntStateOf(2) }       // Asztro az alapértelmezett
+    var toolIdx by remember { mutableIntStateOf(0) }
+    var showOriginal by remember { mutableStateOf(false) }
+    var showExport by remember { mutableStateOf(false) }
+    var showHist by remember { mutableStateOf(true) }
 
     LaunchedEffect(ui.message) { ui.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show(); vm.clearMessage() } }
 
-    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(mimeFor(exportFormat))) { uri ->
-        if (uri != null) vm.export(uri, exportFormat)
-    }
-
     if (!ui.hasImage) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Előbb stackelj, vagy nyiss meg egy képet a Stack fülön.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(Modifier.fillMaxSize().statusBarsPadding(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Nincs megnyitott kép.", color = cs.onSurfaceVariant)
+                TextButton(onClick = onBack) { Text("Vissza a kockákhoz") }
+            }
         }
         return
     }
 
-    Column(Modifier.fillMaxSize()) {
-        // --- előnézet (csípéssel nagyítható) ---
+    val tools = CATEGORIES[cat].second
+    val tool = tools[toolIdx.coerceIn(0, tools.lastIndex)]
+
+    Column(Modifier.fillMaxSize().background(Color.Black)) {
+        // ----- kép (teljes szélesség, pinch zoom, nyomva tartás = eredeti) -----
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
         Box(
-            Modifier.fillMaxWidth().height(300.dp).background(Color.Black)
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        scale = (scale * zoom).coerceIn(1f, 8f)
-                        offset = if (scale == 1f) Offset.Zero else offset + pan
-                    }
-                },
+            Modifier.fillMaxWidth().weight(1f).background(Color.Black)
+                .pointerInput(Unit) { detectTransformGestures { _, pan, zoom, _ -> scale = (scale * zoom).coerceIn(1f, 8f); offset = if (scale == 1f) Offset.Zero else offset + pan } }
+                .pointerInput(Unit) { detectTapGestures(onPress = { showOriginal = true; tryAwaitRelease(); showOriginal = false }, onDoubleTap = { scale = 1f; offset = Offset.Zero }) },
             contentAlignment = Alignment.Center
         ) {
-            ui.preview?.let { bmp ->
-                Image(bmp.asImageBitmap(), contentDescription = "Előnézet", contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y))
+            val bmp = if (showOriginal) ui.originalPreview ?: ui.preview else ui.preview
+            bmp?.let {
+                Image(it.asImageBitmap(), contentDescription = "Előnézet", contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y)
+                        .let { m -> if (night) m.graphicsLayer(alpha = 0.85f) else m })
             }
-            if (ui.processing) CircularProgressIndicator(Modifier.align(Alignment.TopEnd).padding(8.dp))
-        }
-        ui.histogram?.let { Histogram(it) }
-        Text(ui.sourceInfo, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 12.dp))
-
-        TabRow(selectedTabIndex = tab) {
-            listOf("Asztro", "Fotó", "Geometria", "Export").forEachIndexed { i, t -> Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t) }) }
-        }
-
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            when (tab) {
-                0 -> AstroTab(p) { vm.updateParams(it) }
-                1 -> PhotoTab(p) { vm.updateParams(it) }
-                2 -> GeometryTab(p) { vm.updateParams(it) }
-                else -> ExportTab(exportFormat, ui.exporting, onFormat = { exportFormat = it }) { save.launch("novaprocess_${System.currentTimeMillis()}." + ext(exportFormat)) }
+            // felső sáv a kép fölött
+            Row(Modifier.align(Alignment.TopCenter).statusBarsPadding().fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Vissza", tint = cs.onSurface) }
+                Text(if (showOriginal) "EREDETI" else ui.sourceInfo, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                IconButton(onClick = { showExport = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.Download, contentDescription = "Export", tint = cs.onSurface) }
             }
-            TextButton(onClick = { vm.resetParams() }) { Text("Minden beállítás visszaállítása") }
+            if (ui.processing) CircularProgressIndicator(Modifier.align(Alignment.BottomEnd).padding(12.dp).size(22.dp), color = cs.onSurfaceVariant, strokeWidth = 2.dp)
+            if (showHist) ui.histogram?.let { Histogram(it, Modifier.align(Alignment.BottomStart).padding(8.dp).fillMaxWidth(0.55f).background(Color.Black.copy(alpha = 0.35f))) }
+        }
+
+        // ----- alsó eszközpanel -----
+        Column(Modifier.fillMaxWidth().background(cs.background).navigationBarsPadding()) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                CATEGORIES.forEachIndexed { i, (name, _) ->
+                    Text(name, style = MaterialTheme.typography.bodyMedium, color = if (i == cat) cs.onBackground else cs.onSurfaceVariant,
+                        modifier = Modifier.pointerInput(i) { detectTapGestures { cat = i; toolIdx = 0 } })
+                }
+                Spacer(Modifier.size(8.dp))
+            }
+
+            Column(Modifier.padding(horizontal = 20.dp)) {
+                if (tool.options == null) {
+                    BigSlider(tool.label, tool.get(p), tool.min, tool.max, tool.fmt,
+                        onDragStart = { vm.beginDrag() }, onChange = { v -> vm.previewParams { tool.set(it, v) } }, onDragEnd = { vm.endDrag() })
+                } else {
+                    Text(tool.label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
+                        tool.options.forEach { (lbl, v) -> Pill(lbl, tool.get(p) == v) { vm.commitParams { tool.set(it, v) } } }
+                    }
+                }
+            }
+
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                tools.forEachIndexed { i, t -> Pill(t.label.substringBefore(" (").substringBefore(" ·"), i == toolIdx) { toolIdx = i } }
+            }
+
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row {
+                    IconButton(onClick = { vm.undo() }, enabled = ui.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Visszavonás", tint = if (ui.canUndo) cs.onSurface else cs.outline) }
+                    IconButton(onClick = { vm.redo() }, enabled = ui.canRedo) { Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Újra", tint = if (ui.canRedo) cs.onSurface else cs.outline) }
+                }
+                Text(ui.stats, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.pointerInput(Unit) { detectTapGestures { showHist = !showHist } })
+                Row {
+                    IconButton(onClick = { vm.setNight(!night) }) { Icon(Icons.Filled.Compare, contentDescription = "Éjszakai mód", tint = if (night) cs.primary else cs.onSurfaceVariant) }
+                    IconButton(onClick = { vm.resetParams() }) { Icon(Icons.Filled.RestartAlt, contentDescription = "Nullázás", tint = cs.onSurfaceVariant) }
+                }
+            }
         }
     }
-}
 
-private fun mimeFor(f: ExportFormat) = when (f) { ExportFormat.JPEG -> "image/jpeg"; ExportFormat.PNG -> "image/png"; ExportFormat.TIFF16 -> "image/tiff" }
-private fun ext(f: ExportFormat) = when (f) { ExportFormat.JPEG -> "jpg"; ExportFormat.PNG -> "png"; ExportFormat.TIFF16 -> "tif" }
-
-@Composable
-private fun Histogram(h: Array<IntArray>) {
-    val colors = if (h.size == 3) listOf(Color(0xFFFF6B6B), Color(0xFF7CF2B0), Color(0xFF6BA8FF)) else listOf(Color(0xFFE8ECF4))
-    Canvas(Modifier.fillMaxWidth().height(56.dp).background(Color(0xFF060910))) {
-        val maxV = h.maxOf { ch -> ch.max() }.coerceAtLeast(1).toFloat()
-        val stepX = size.width / 255f
-        h.forEachIndexed { ci, ch ->
-            val path = Path()
-            path.moveTo(0f, size.height)
-            for (i in 0 until 256) {
-                val y = size.height - (kotlin.math.ln(1f + ch[i]) / kotlin.math.ln(1f + maxV)) * size.height
-                path.lineTo(i * stepX, y)
-            }
-            path.lineTo(size.width, size.height); path.close()
-            drawPath(path, colors[ci].copy(alpha = 0.45f))
-        }
-    }
-}
-
-@Composable
-private fun AstroTab(p: ProcessParams, set: ((ProcessParams) -> ProcessParams) -> Unit) {
-    Section("Háttér és színek (lineáris)") {
-        Check("Háttér-gradiens kivonás (polinom)", p.backgroundExtraction) { v -> set { it.copy(backgroundExtraction = v) } }
-        if (p.backgroundExtraction) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = p.backgroundDegree == 1, onClick = { set { it.copy(backgroundDegree = 1) } }, label = { Text("Sík") })
-            FilterChip(selected = p.backgroundDegree == 2, onClick = { set { it.copy(backgroundDegree = 2) } }, label = { Text("Másodfokú") })
-        }
-        Check("Háttér semlegesítése (csatorna-mediánok)", p.backgroundNeutralize) { v -> set { it.copy(backgroundNeutralize = v) } }
-        Check("Fehéregyensúly csillagokra", p.whiteBalanceStars) { v -> set { it.copy(whiteBalanceStars = v) } }
-    }
-    Section("Stretch") {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(StretchMode.NONE to "Nincs", StretchMode.AUTO to "Auto", StretchMode.ASINH to "Asinh", StretchMode.MTF to "MTF").forEach { (m, l) ->
-                FilterChip(selected = p.stretchMode == m, onClick = { set { it.copy(stretchMode = m) } }, label = { Text(l) })
-            }
-        }
-        when (p.stretchMode) {
-            StretchMode.ASINH -> {
-                LabeledSlider("Asinh erősség", p.asinhStrength, 1f, 1000f, { "%.0f".format(it) }) { v -> set { it.copy(asinhStrength = v) } }
-                LabeledSlider("Feketepont", p.blackPoint, 0f, 0.2f, { "%.3f".format(it) }) { v -> set { it.copy(blackPoint = v) } }
-            }
-            StretchMode.AUTO -> {
-                LabeledSlider("Cél háttér", p.mtfMidtones, 0.05f, 0.6f) { v -> set { it.copy(mtfMidtones = v) } }
-                LabeledSlider("Árnyék vágás (MAD×)", p.mtfShadowClip, 0f, 5f) { v -> set { it.copy(mtfShadowClip = v) } }
-            }
-            StretchMode.MTF -> {
-                LabeledSlider("Cél háttér", p.mtfMidtones, 0.05f, 0.6f) { v -> set { it.copy(mtfMidtones = v) } }
-                LabeledSlider("Feketepont", p.blackPoint, 0f, 0.3f, { "%.3f".format(it) }) { v -> set { it.copy(blackPoint = v) } }
-            }
-            StretchMode.NONE -> LabeledSlider("Feketepont", p.blackPoint, 0f, 0.2f, { "%.3f".format(it) }) { v -> set { it.copy(blackPoint = v) } }
-        }
-    }
-    Section("Csillagok és zaj") {
-        LabeledSlider("Csillagcsökkentés", p.starReduction, 0f, 1f) { v -> set { it.copy(starReduction = v) } }
-        LabeledSlider("Csillag sugár (px)", p.starRadius.toFloat(), 1f, 5f, { "%.0f".format(it) }) { v -> set { it.copy(starRadius = v.toInt()) } }
-        LabeledSlider("Zajszűrés", p.denoise, 0f, 1f) { v -> set { it.copy(denoise = v) } }
-        LabeledSlider("Zajszűrés sugár", p.denoiseRadius.toFloat(), 1f, 4f, { "%.0f".format(it) }) { v -> set { it.copy(denoiseRadius = v.toInt()) } }
-    }
+    if (showExport) ExportSheet(vm, ui.exporting) { showExport = false }
 }
 
 @Composable
-private fun PhotoTab(p: ProcessParams, set: ((ProcessParams) -> ProcessParams) -> Unit) {
-    Section("Fény") {
-        LabeledSlider("Expozíció (EV)", p.exposure, -3f, 3f) { v -> set { it.copy(exposure = v) } }
-        LabeledSlider("Kontraszt", p.contrast, -1f, 1f) { v -> set { it.copy(contrast = v) } }
-        LabeledSlider("Csúcsfények", p.highlights, -1f, 1f) { v -> set { it.copy(highlights = v) } }
-        LabeledSlider("Árnyékok", p.shadows, -1f, 1f) { v -> set { it.copy(shadows = v) } }
-        LabeledSlider("Fehérek", p.whites, -1f, 1f) { v -> set { it.copy(whites = v) } }
-        LabeledSlider("Feketék", p.blacks, -1f, 1f) { v -> set { it.copy(blacks = v) } }
-        LabeledSlider("Gamma", p.gamma, 0.5f, 2f) { v -> set { it.copy(gamma = v) } }
-        LabeledSlider("Szintek · fekete", p.levelsBlack, 0f, 0.5f) { v -> set { it.copy(levelsBlack = v) } }
-        LabeledSlider("Szintek · fehér", p.levelsWhite, 0.5f, 1f) { v -> set { it.copy(levelsWhite = v) } }
-    }
-    Section("Szín") {
-        LabeledSlider("Hőmérséklet", p.temperature, -1f, 1f) { v -> set { it.copy(temperature = v) } }
-        LabeledSlider("Árnyalat", p.tint, -1f, 1f) { v -> set { it.copy(tint = v) } }
-        LabeledSlider("Telítettség", p.saturation, -1f, 1f) { v -> set { it.copy(saturation = v) } }
-        LabeledSlider("Vibrance", p.vibrance, -1f, 1f) { v -> set { it.copy(vibrance = v) } }
-        LabeledSlider("Vörös", p.redBalance, -0.5f, 0.5f) { v -> set { it.copy(redBalance = v) } }
-        LabeledSlider("Zöld", p.greenBalance, -0.5f, 0.5f) { v -> set { it.copy(greenBalance = v) } }
-        LabeledSlider("Kék", p.blueBalance, -0.5f, 0.5f) { v -> set { it.copy(blueBalance = v) } }
-    }
-    Section("Részletek") {
-        LabeledSlider("Clarity", p.clarity, -1f, 1f) { v -> set { it.copy(clarity = v) } }
-        LabeledSlider("Dehaze", p.dehaze, 0f, 1f) { v -> set { it.copy(dehaze = v) } }
-        LabeledSlider("Élesítés", p.sharpen, 0f, 1f) { v -> set { it.copy(sharpen = v) } }
-    }
-}
-
-@Composable
-private fun GeometryTab(p: ProcessParams, set: ((ProcessParams) -> ProcessParams) -> Unit) {
-    Section("Forgatás / tükrözés") {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(Rotation.R0 to "0°", Rotation.R90 to "90°", Rotation.R180 to "180°", Rotation.R270 to "270°").forEach { (r, l) ->
-                FilterChip(selected = p.rotation == r, onClick = { set { it.copy(rotation = r) } }, label = { Text(l) })
+private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onClose: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    var format by remember { mutableStateOf(ExportFormat.JPEG) }
+    val mime = when (format) { ExportFormat.JPEG -> "image/jpeg"; ExportFormat.PNG -> "image/png"; ExportFormat.TIFF16 -> "image/tiff" }
+    val ext = when (format) { ExportFormat.JPEG -> "jpg"; ExportFormat.PNG -> "png"; ExportFormat.TIFF16 -> "tif" }
+    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(mime)) { uri -> if (uri != null) { vm.export(uri, format); onClose() } }
+    ModalBottomSheet(onDismissRequest = onClose, containerColor = cs.surface) {
+        Column(Modifier.padding(20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text("Export", style = MaterialTheme.typography.headlineMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill("JPEG", format == ExportFormat.JPEG) { format = ExportFormat.JPEG }
+                Pill("PNG", format == ExportFormat.PNG) { format = ExportFormat.PNG }
+                Pill("TIFF 16 bit", format == ExportFormat.TIFF16) { format = ExportFormat.TIFF16 }
+            }
+            Text("A teljes felbontású képre fut le minden beállítás; nagy stacknél ez több tíz másodperc.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+            androidx.compose.material3.Button(onClick = { save.launch("novaprocess_${System.currentTimeMillis()}.$ext") }, enabled = !exporting, modifier = Modifier.fillMaxWidth().height(52.dp), shape = CircleShape) {
+                Text(if (exporting) "Exportálás…" else "Mentés…")
             }
         }
-        Check("Vízszintes tükrözés", p.flipH) { v -> set { it.copy(flipH = v) } }
-    }
-    Section("Vágás (arányos)") {
-        LabeledSlider("Bal", p.cropLeft, 0f, 0.45f) { v -> set { it.copy(cropLeft = v) } }
-        LabeledSlider("Felső", p.cropTop, 0f, 0.45f) { v -> set { it.copy(cropTop = v) } }
-        LabeledSlider("Jobb", p.cropRight, 0.55f, 1f) { v -> set { it.copy(cropRight = v) } }
-        LabeledSlider("Alsó", p.cropBottom, 0.55f, 1f) { v -> set { it.copy(cropBottom = v) } }
-    }
-}
-
-@Composable
-private fun ExportTab(format: ExportFormat, exporting: Boolean, onFormat: (ExportFormat) -> Unit, onSave: () -> Unit) {
-    Section("Formátum") {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            FilterChip(selected = format == ExportFormat.JPEG, onClick = { onFormat(ExportFormat.JPEG) }, label = { Text("JPEG") })
-            FilterChip(selected = format == ExportFormat.PNG, onClick = { onFormat(ExportFormat.PNG) }, label = { Text("PNG") })
-            FilterChip(selected = format == ExportFormat.TIFF16, onClick = { onFormat(ExportFormat.TIFF16) }, label = { Text("TIFF 16 bit") })
-        }
-        Text("A teljes felbontású képre fut le az összes beállítás; nagy stacknél ez több tíz másodperc is lehet.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Button(onClick = onSave, enabled = !exporting, modifier = Modifier.fillMaxWidth()) { Text(if (exporting) "Exportálás…" else "Mentés…") }
-    }
-}
-
-@Composable
-private fun Check(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Checkbox(checked = checked, onCheckedChange = onChange)
-        Text(label)
     }
 }

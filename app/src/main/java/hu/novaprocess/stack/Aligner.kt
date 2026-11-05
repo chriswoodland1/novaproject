@@ -85,7 +85,8 @@ object Aligner {
         val out = FloatImage(w, h, src.channels)
         val cx = w / 2f; val cy = h / 2f
         val c = cos(-tf.angle); val s = sin(-tf.angle)
-        for (y in 0 until h) {
+        hu.novaprocess.image.Par.rows(h) { y0, y1 ->
+          for (y in y0 until y1) {
             for (x in 0 until w) {
                 // inverz: referencia (x,y) -> forrás
                 val rx = x - cx - tf.dx; val ry = y - cy - tf.dy
@@ -102,6 +103,43 @@ object Aligner {
                     out.data[ch][y * w + x] = v
                 }
             }
+          }
+        }
+        return out
+    }
+
+    /**
+     * Drizzle-szerű 2× felskálázás: a célrácsot `scale`-szer finomabbra vesszük, és a forrást
+     * a transzformáció inverzével, bilineárisan mintavételezzük. Sok, kissé eltolt kocka átlaga
+     * így a szubpixeles információt részben visszanyeri.
+     */
+    fun warpScaled(src: FloatImage, tf: Transform, scale: Int): FloatImage {
+        if (scale <= 1) return warp(src, tf)
+        val w = src.width; val h = src.height
+        val ow = w * scale; val oh = h * scale
+        val out = FloatImage(ow, oh, src.channels)
+        val cx = w / 2f; val cy = h / 2f
+        val c = cos(-tf.angle); val s = sin(-tf.angle)
+        val inv = 1f / scale
+        hu.novaprocess.image.Par.rows(oh) { y0, y1 ->
+          for (oy in y0 until y1) {
+            val y = (oy + 0.5f) * inv - 0.5f
+            for (ox in 0 until ow) {
+                val x = (ox + 0.5f) * inv - 0.5f
+                val rx = x - cx - tf.dx; val ry = y - cy - tf.dy
+                val fx = c * rx - s * ry + cx
+                val fy = s * rx + c * ry + cy
+                if (fx < 0f || fy < 0f || fx >= w - 1 || fy >= h - 1) continue
+                val x0 = fx.toInt(); val yy0 = fy.toInt()
+                val ax = fx - x0; val ay = fy - yy0
+                val i00 = yy0 * w + x0
+                for (ch in 0 until src.channels) {
+                    val a = src.data[ch]
+                    out.data[ch][oy * ow + ox] = (a[i00] * (1 - ax) + a[i00 + 1] * ax) * (1 - ay) +
+                            (a[i00 + w] * (1 - ax) + a[i00 + w + 1] * ax) * ay
+                }
+            }
+          }
         }
         return out
     }

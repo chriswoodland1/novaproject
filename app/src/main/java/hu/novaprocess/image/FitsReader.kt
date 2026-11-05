@@ -135,7 +135,8 @@ object FitsReader {
             val xx = x.coerceIn(0, w - 1); val yy = y.coerceIn(0, h - 1)
             return src[yy * w + xx]
         }
-        for (y in 0 until h) for (x in 0 until w) {
+        Par.rows(h) { y0, y1 ->
+          for (y in y0 until y1) for (x in 0 until w) {
             val own = chAt[y and 1][x and 1]
             val i = y * w + x
             val v = src[i]
@@ -153,6 +154,7 @@ object FitsReader {
                 }
                 out.data[c][i] = if (n > 0) sum / n else v
             }
+          }
         }
         return out
     }

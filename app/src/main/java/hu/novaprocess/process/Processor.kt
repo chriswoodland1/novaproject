@@ -237,15 +237,19 @@ object Processor {
     private fun maxFilter(a: FloatArray, w: Int, h: Int, r: Int): FloatArray = sepFilter(a, w, h, r, false)
     private fun sepFilter(a: FloatArray, w: Int, h: Int, r: Int, isMin: Boolean): FloatArray {
         val tmp = FloatArray(a.size); val out = FloatArray(a.size)
-        for (y in 0 until h) for (x in 0 until w) {
+        hu.novaprocess.image.Par.rows(h) { y0, y1 ->
+          for (y in y0 until y1) for (x in 0 until w) {
             var v = a[y * w + x]
             for (d in -r..r) { val xx = (x + d).coerceIn(0, w - 1); val s = a[y * w + xx]; v = if (isMin) min(v, s) else max(v, s) }
             tmp[y * w + x] = v
+          }
         }
-        for (y in 0 until h) for (x in 0 until w) {
+        hu.novaprocess.image.Par.rows(h) { y0, y1 ->
+          for (y in y0 until y1) for (x in 0 until w) {
             var v = tmp[y * w + x]
             for (d in -r..r) { val yy = (y + d).coerceIn(0, h - 1); val s = tmp[yy * w + x]; v = if (isMin) min(v, s) else max(v, s) }
             out[y * w + x] = v
+          }
         }
         return out
     }
@@ -260,7 +264,8 @@ object Processor {
         val inv2s = 1f / (2f * sigmaR * sigmaR)
         for (c in 0 until src.channels) {
             val a = src.data[c]; val o = out.data[c]
-            for (y in 0 until h) for (x in 0 until w) {
+            hu.novaprocess.image.Par.rows(h) { y0, y1 ->
+              for (y in y0 until y1) for (x in 0 until w) {
                 val i = y * w + x
                 val center = lum[i]
                 var acc = 0f; var wsum = 0f
@@ -278,6 +283,7 @@ object Processor {
                 // fényes részeken (csillagok, mag) kevésbé simítunk
                 val k = amount * (1f - center).coerceIn(0f, 1f)
                 o[i] = a[i] * (1f - k) + smooth * k
+              }
             }
         }
         return out

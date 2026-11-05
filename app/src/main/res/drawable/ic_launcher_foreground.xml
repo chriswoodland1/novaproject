@@ -4,8 +4,8 @@
     android:viewportWidth="108" android:viewportHeight="108">
     <!-- stilizált galaxis-ellipszis: három réteg -->
     <group android:rotation="-28" android:pivotX="54" android:pivotY="54">
-        <path android:fillColor="#1B2C55" android:pathData="M54,54 m-30,0 a30,12 0 1,0 60,0 a30,12 0 1,0 -60,0" />
-        <path android:fillColor="#3E5A9A" android:pathData="M54,54 m-18,0 a18,7 0 1,0 36,0 a18,7 0 1,0 -36,0" />
-        <path android:fillColor="#F2B544" android:pathData="M54,54 m-7,0 a7,3 0 1,0 14,0 a7,3 0 1,0 -14,0" />
+        <path android:fillColor="#2A2A2A" android:pathData="M54,54 m-30,0 a30,12 0 1,0 60,0 a30,12 0 1,0 -60,0" />
+        <path android:fillColor="#6E6E6E" android:pathData="M54,54 m-18,0 a18,7 0 1,0 36,0 a18,7 0 1,0 -36,0" />
+        <path android:fillColor="#F0F0F0" android:pathData="M54,54 m-7,0 a7,3 0 1,0 14,0 a7,3 0 1,0 -14,0" />
     </group>
 </vector>

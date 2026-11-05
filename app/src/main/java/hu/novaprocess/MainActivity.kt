@@ -3,27 +3,43 @@ package hu.novaprocess
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import hu.novaprocess.ui.EditScreen
-import hu.novaprocess.ui.HomeScreen
+import hu.novaprocess.ui.LibraryScreen
 import hu.novaprocess.ui.SettingsScreen
+import hu.novaprocess.ui.StackScreen
 import hu.novaprocess.ui.UpdatePrompt
 import hu.novaprocess.ui.theme.NovaTheme
 import hu.novaprocess.vm.EditorViewModel
@@ -32,35 +48,62 @@ class MainActivity : ComponentActivity() {
     private val vm: EditorViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        setContent { NovaTheme { NovaRoot(vm) } }
+        setContent {
+            val night by vm.nightMode.collectAsState()
+            NovaTheme(night = night) { NovaRoot(vm) }
+        }
     }
 }
 
+/** Alul lebegő, kapszula alakú navigáció (Darkroom). A képernyők maguk hagynak helyet neki. */
 @Composable
 fun NovaRoot(vm: EditorViewModel) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
-    val route = backStack?.destination?.route ?: "home"
+    val route = backStack?.destination?.route ?: "stack"
+    val hideBar = route == "edit"   // a szerkesztőben a kép a fő, saját alsó sávja van
 
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(selected = route == "home", onClick = { nav.navigate("home") { launchSingleTop = true; popUpTo("home") } },
-                    icon = { Icon(Icons.Filled.Layers, contentDescription = null) }, label = { Text("Stack") })
-                NavigationBarItem(selected = route == "edit", onClick = { nav.navigate("edit") { launchSingleTop = true } },
-                    icon = { Icon(Icons.Filled.AutoAwesome, contentDescription = null) }, label = { Text("Szerkesztés") })
-                NavigationBarItem(selected = route == "settings", onClick = { nav.navigate("settings") { launchSingleTop = true } },
-                    icon = { Icon(Icons.Filled.Settings, contentDescription = null) }, label = { Text("Beállítások") })
-            }
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        NavHost(navController = nav, startDestination = "stack", modifier = Modifier.fillMaxSize()) {
+            composable("stack") { StackScreen(vm, onOpenEditor = { nav.navigate("edit") { launchSingleTop = true } }) }
+            composable("edit") { EditScreen(vm, onBack = { nav.popBackStack() }) }
+            composable("library") { LibraryScreen(vm, onOpenEditor = { nav.navigate("edit") { launchSingleTop = true } }) }
+            composable("settings") { SettingsScreen(vm) }
         }
-    ) { pad ->
-        NavHost(navController = nav, startDestination = "home", modifier = Modifier.padding(pad)) {
-            composable("home") { HomeScreen(vm, onOpenEditor = { nav.navigate("edit") { launchSingleTop = true } }) }
-            composable("edit") { EditScreen(vm) }
-            composable("settings") { SettingsScreen() }
-        }
-        // automatikus frissítés-ellenőrzés indításkor (max. 6 óránként)
+        if (!hideBar) FloatingNav(nav, route, Modifier.align(Alignment.BottomCenter))
         UpdatePrompt(auto = true)
+    }
+}
+
+@Composable
+private fun FloatingNav(nav: NavHostController, route: String, modifier: Modifier) {
+    val items = listOf(
+        Triple("stack", Icons.Filled.Layers, "Kockák"),
+        Triple("edit", Icons.Filled.Tune, "Szerkesztő"),
+        Triple("library", Icons.Filled.PhotoLibrary, "Könyvtár"),
+        Triple("settings", Icons.Filled.Settings, "Beállítások")
+    )
+    Row(
+        modifier.navigationBarsPadding().padding(horizontal = 16.dp, vertical = 14.dp).fillMaxWidth().height(64.dp)
+            .clip(CircleShape).background(MaterialTheme.colorScheme.surface),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        items.forEach { (r, icon, label) -> NavItem(icon, label, route == r) { nav.navigate(r) { launchSingleTop = true; popUpTo("stack") } } }
+    }
+}
+
+@Composable
+private fun NavItem(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
+        Box(
+            Modifier.size(44.dp).clip(CircleShape).background(if (selected) cs.primary else cs.surface),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = label, tint = if (selected) cs.onPrimary else cs.onSurfaceVariant)
+        }
     }
 }

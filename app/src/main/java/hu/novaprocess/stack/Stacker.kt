@@ -19,6 +19,9 @@ data class StackOptions(
     val binning: Int = 1,              // 1 = teljes felbontás, 2 = fél (gyors, kevesebb memória)
     val minMatches: Int = 6,           // ennél kevesebb csillag-egyezéssel a kocka kimarad
     val alignFrames: Boolean = true,
+    val drizzle: Int = 1,              // 1 = ki, 2 = 2× felskálázott kimenet
+    val medianMasters: Boolean = true, // mesterkockák mediánnal (ha belefér a memóriába)
+    val hotPixelFix: Boolean = true,   // hot pixel térkép a master darkból
     val darkUris: List<Uri> = emptyList(),
     val flatUris: List<Uri> = emptyList(),
     val biasUris: List<Uri> = emptyList()
@@ -45,9 +48,12 @@ object Stacker {
         val log = ArrayList<String>()
 
         // --- mesterkockák ---
-        val dark = buildMaster(context, opts.darkUris, opts.binning, "Dark") { onProgress(it) }
-        val flat = buildMaster(context, opts.flatUris, opts.binning, "Flat") { onProgress(it) }
-        val bias = buildMaster(context, opts.biasUris, opts.binning, "Bias") { onProgress(it) }
+        val dark = buildMaster(context, opts.darkUris, opts.binning, "Dark", opts.medianMasters) { onProgress(it) }
+        val flat = buildMaster(context, opts.flatUris, opts.binning, "Flat", opts.medianMasters) { onProgress(it) }
+        val bias = buildMaster(context, opts.biasUris, opts.binning, "Bias", opts.medianMasters) { onProgress(it) }
+        val hotMap: BooleanArray? = if (opts.hotPixelFix && dark != null) hotPixelMap(dark).also { m ->
+            log += "Hot pixel térkép: ${m.count { it }} pixel"
+        } else null
         val flatNorm = flat?.let { f ->
             val out = f.copy()
             for (c in 0 until out.channels) {
@@ -63,10 +69,13 @@ object Stacker {
 
         // --- referencia ---
         onProgress(StackProgress("Referencia betöltése", 0, frames.size))
-        val ref = loadCalibrated(context, frames[0], opts.binning, dark, flatNorm, bias)
-        val w = ref.width; val h = ref.height; val ch = ref.channels
+        val ref = loadCalibrated(context, frames[0], opts.binning, dark, flatNorm, bias, hotMap)
+        val w0 = ref.width; val h0 = ref.height; val ch = ref.channels
+        val dz = opts.drizzle.coerceIn(1, 2)
+        val w = w0 * dz; val h = h0 * dz
+        if (dz > 1) log += "Drizzle ${dz}×: kimenet ${w}×${h}"
         val refStars = if (opts.alignFrames) StarDetector.detect(ref) else emptyList()
-        log += "Referencia: ${w}×${h}, ${refStars.size} csillag"
+        log += "Referencia: ${w0}×${h0}, ${refStars.size} csillag"
 
         // --- 1. menet: Welford ---
         val mean = Array(ch) { FloatArray(w * h) }
@@ -78,21 +87,21 @@ object Stacker {
         for ((idx, uri) in frames.withIndex()) {
             coroutineContext.ensureActive()
             onProgress(StackProgress("1. menet · igazítás", idx + 1, frames.size, ImageLoader.displayName(context, uri)))
-            val img = if (idx == 0) ref else loadCalibrated(context, uri, opts.binning, dark, flatNorm, bias)
-            if (img.width != w || img.height != h || img.channels != ch) {
+            val img = if (idx == 0) ref else loadCalibrated(context, uri, opts.binning, dark, flatNorm, bias, hotMap)
+            if (img.width != w0 || img.height != h0 || img.channels != ch) {
                 log += "Kihagyva (eltérő méret): ${ImageLoader.displayName(context, uri)}"
                 transforms.add(null); rejected++; continue
             }
             val tf = when {
                 !opts.alignFrames || idx == 0 -> Transform(0f, 0f, 0f, Int.MAX_VALUE)
-                else -> Aligner.estimate(refStars, StarDetector.detect(img), w, h)
+                else -> Aligner.estimate(refStars, StarDetector.detect(img), w0, h0)
             }
             if (tf.matches < opts.minMatches) {
                 log += "Elvetve (${tf.matches} egyezés): ${ImageLoader.displayName(context, uri)}"
                 transforms.add(null); rejected++; continue
             }
             transforms.add(tf)
-            val reg = if (tf.angle == 0f && tf.dx == 0f && tf.dy == 0f) img else Aligner.warp(img, tf)
+            val reg = registered(img, tf, dz)
             accumulateWelford(reg, mean, m2, count)
             used++
         }
@@ -111,8 +120,8 @@ object Stacker {
                 coroutineContext.ensureActive()
                 val tf = transforms[idx] ?: continue
                 onProgress(StackProgress("2. menet · sigma-clip", idx + 1, frames.size, ImageLoader.displayName(context, uri)))
-                val img = loadCalibrated(context, uri, opts.binning, dark, flatNorm, bias)
-                val reg = if (tf.angle == 0f && tf.dx == 0f && tf.dy == 0f) img else Aligner.warp(img, tf)
+                val img = loadCalibrated(context, uri, opts.binning, dark, flatNorm, bias, hotMap)
+                val reg = registered(img, tf, dz)
                 for (c in 0 until ch) {
                     val a = reg.data[c]; val mu = mean[c]; val sg = sigma[c]; val s = sum[c]
                     for (i in 0 until w * h) {
@@ -139,6 +148,39 @@ object Stacker {
         StackResult(result, used, rejected, log)
     }
 
+    private fun registered(img: FloatImage, tf: Transform, dz: Int): FloatImage = when {
+        dz > 1 -> Aligner.warpScaled(img, tf, dz)
+        tf.angle == 0f && tf.dx == 0f && tf.dy == 0f -> img
+        else -> Aligner.warp(img, tf)
+    }
+
+    /** Hot pixelek: a master darkban a medián + 6·MAD fölötti pixelek (luminancián). */
+    fun hotPixelMap(dark: FloatImage): BooleanArray {
+        val lum = dark.toMono().data[0]
+        val med = hu.novaprocess.process.Processor.median(lum)
+        val mad = hu.novaprocess.process.Processor.mad(lum, med).coerceAtLeast(1e-6f)
+        val thr = med + 6f * mad * 1.4826f
+        return BooleanArray(lum.size) { lum[it] > thr }
+    }
+
+    /** A jelölt pixeleket a 4 szomszéd mediánjával helyettesíti. */
+    private fun fixHotPixels(img: FloatImage, map: BooleanArray) {
+        if (map.size != img.size) return
+        val w = img.width; val h = img.height
+        for (c in 0 until img.channels) {
+            val a = img.data[c]
+            for (i in map.indices) {
+                if (!map[i]) continue
+                val x = i % w; val y = i / w
+                val v = floatArrayOf(
+                    a[y * w + (x - 1).coerceAtLeast(0)], a[y * w + (x + 1).coerceAtMost(w - 1)],
+                    a[(y - 1).coerceAtLeast(0) * w + x], a[(y + 1).coerceAtMost(h - 1) * w + x]
+                )
+                v.sort(); a[i] = (v[1] + v[2]) / 2f
+            }
+        }
+    }
+
     private fun accumulateWelford(img: FloatImage, mean: Array<FloatArray>, m2: Array<FloatArray>, count: IntArray) {
         val n = img.size
         for (i in 0 until n) count[i]++
@@ -156,10 +198,11 @@ object Stacker {
 
     private fun loadCalibrated(
         context: Context, uri: Uri, binning: Int,
-        dark: FloatImage?, flatNorm: FloatImage?, bias: FloatImage?
+        dark: FloatImage?, flatNorm: FloatImage?, bias: FloatImage?, hotMap: BooleanArray? = null
     ): FloatImage {
         var img = ImageLoader.load(context, uri)
         if (binning > 1) img = img.downscale(maxOf(img.width, img.height) / binning)
+        if (hotMap != null) fixHotPixels(img, hotMap)
         if (dark != null && dark.width == img.width && dark.channels == img.channels) subtract(img, dark)
         else if (bias != null && bias.width == img.width && bias.channels == img.channels) subtract(img, bias)
         if (flatNorm != null && flatNorm.width == img.width && flatNorm.channels == img.channels) divide(img, flatNorm)
@@ -173,9 +216,37 @@ object Stacker {
         for (c in 0 until a.channels) { val x = a.data[c]; val y = b.data[c]; for (i in x.indices) x[i] = (x[i] / y[i]).coerceIn(0f, 1f) }
     }
 
-    /** Mesterkocka: egyszerű átlag (memóriakímélő). */
-    private fun buildMaster(context: Context, uris: List<Uri>, binning: Int, label: String, onProgress: (StackProgress) -> Unit): FloatImage? {
+    /**
+     * Mesterkocka: medián, ha az összes kocka befér a memóriába (max ~400 MB), különben átlag.
+     */
+    private fun buildMaster(context: Context, uris: List<Uri>, binning: Int, label: String, median: Boolean, onProgress: (StackProgress) -> Unit): FloatImage? {
         if (uris.isEmpty()) return null
+        if (median && uris.size >= 3) {
+            val first = ImageLoader.load(context, uris[0]).let { if (binning > 1) it.downscale(maxOf(it.width, it.height) / binning) else it }
+            val bytes = first.size.toLong() * first.channels * 4L * uris.size
+            if (bytes < 400L * 1024 * 1024) {
+                val all = ArrayList<FloatImage>(uris.size); all.add(first)
+                for (i in 1 until uris.size) {
+                    onProgress(StackProgress("Master $label (medián)", i + 1, uris.size))
+                    val img = ImageLoader.load(context, uris[i]).let { if (binning > 1) it.downscale(maxOf(it.width, it.height) / binning) else it }
+                    if (img.width == first.width && img.height == first.height && img.channels == first.channels) all.add(img)
+                }
+                val out = FloatImage(first.width, first.height, first.channels)
+                val n = all.size
+                for (c in 0 until out.channels) {
+                    val dst = out.data[c]
+                    hu.novaprocess.image.Par.range(out.size) { i0, i1 ->
+                        val buf = FloatArray(n)
+                        for (i in i0 until i1) {
+                            for (k in 0 until n) buf[k] = all[k].data[c][i]
+                            buf.sort()
+                            dst[i] = if (n % 2 == 1) buf[n / 2] else (buf[n / 2 - 1] + buf[n / 2]) / 2f
+                        }
+                    }
+                }
+                return out
+            }
+        }
         var acc: FloatImage? = null
         for ((i, u) in uris.withIndex()) {
             onProgress(StackProgress("Master $label", i + 1, uris.size))
