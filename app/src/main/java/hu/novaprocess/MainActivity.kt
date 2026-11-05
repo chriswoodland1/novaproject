@@ -54,6 +54,28 @@ class MainActivity : ComponentActivity() {
             val night by vm.nightMode.collectAsState()
             NovaTheme(night = night) { NovaRoot(vm) }
         }
+        handleShare(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleShare(intent)
+    }
+
+    /** Megosztás → NovaProcess (ACTION_SEND / SEND_MULTIPLE / VIEW). */
+    private fun handleShare(intent: android.content.Intent?) {
+        intent ?: return
+        val uris = ArrayList<android.net.Uri>()
+        when (intent.action) {
+            android.content.Intent.ACTION_SEND -> (intent.getParcelableExtra(android.content.Intent.EXTRA_STREAM) as? android.net.Uri)?.let { uris.add(it) }
+            android.content.Intent.ACTION_SEND_MULTIPLE -> intent.getParcelableArrayListExtra<android.net.Uri>(android.content.Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+            android.content.Intent.ACTION_VIEW -> intent.data?.let { uris.add(it) }
+            else -> return
+        }
+        if (uris.isEmpty()) return
+        uris.forEach { runCatching { grantUriPermission(packageName, it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
+        vm.handleIncoming(uris)
+        intent.action = null
     }
 }
 
@@ -71,6 +93,11 @@ fun NovaRoot(vm: EditorViewModel) {
             composable("edit") { EditScreen(vm, onBack = { nav.popBackStack() }) }
             composable("library") { LibraryScreen(vm, onOpenEditor = { nav.navigate("edit") { launchSingleTop = true } }) }
             composable("settings") { SettingsScreen(vm) }
+        }
+        // bejövő megosztás: 1 kép → szerkesztő, több → kockák
+        val incoming by vm.incoming.collectAsState()
+        androidx.compose.runtime.LaunchedEffect(incoming) {
+            incoming?.let { list -> nav.navigate(if (list.size == 1) "edit" else "stack") { launchSingleTop = true }; vm.consumeIncoming() }
         }
         if (!hideBar) FloatingNav(nav, route, Modifier.align(Alignment.BottomCenter))
         UpdatePrompt(auto = true)

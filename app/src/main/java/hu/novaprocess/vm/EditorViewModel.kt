@@ -38,7 +38,11 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
-enum class ExportFormat { JPEG, PNG, TIFF16, FRAMED_JPEG }
+enum class ExportFormat { JPEG, PNG, TIFF16, FRAMED_JPEG, FITS32 }
+enum class ExportSize(val label: String, val w: Int, val h: Int) {
+    ORIGINAL("Eredeti", 0, 0), IG_SQUARE("Instagram négyzet 1080", 1080, 1080), IG_PORTRAIT("Instagram portré 1080×1350", 1080, 1350),
+    ASTROBIN("Astrobin 1920", 1920, 0), UHD("4K 3840", 3840, 0)
+}
 
 data class StackUiState(
     val running: Boolean = false,
@@ -312,6 +316,38 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------------------------------------------------------------- A/B összehasonlítás
+    val compare = MutableStateFlow<Bitmap?>(null)
+    fun loadCompare(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                val img = withContext(Dispatchers.IO) { ImageLoader.load(getApplication<Application>(), uri) }
+                val pv = previewSource
+                val target = if (pv != null) img.downscale(maxOf(pv.width, pv.height)) else img.downscale(PREVIEW_SIDE)
+                // ha lineáris FITS/TIFF jön, autostretch; JPEG-nél csak a lineárisból visszaalakítás
+                val name = ImageLoader.displayName(getApplication<Application>(), uri)
+                val shown = if (ImageLoader.isFits(name) || ImageLoader.isTiff(name)) Processor.process(target, ProcessParams()) else target.also { t -> for (c in 0 until t.channels) { val a = t.data[c]; for (i in a.indices) a[i] = ImageLoader.linearToSrgb(a[i]) } }
+                compare.value = shown.toBitmap()
+            } catch (e: Throwable) { _ui.update { it.copy(message = "Összehasonlító kép nem nyitható: ${e.message}") } }
+        }
+    }
+    fun clearCompare() { compare.value = null }
+
+    suspend fun starShapeMap(): hu.novaprocess.process.StarShape.Map {
+        val src = previewSource ?: throw IllegalStateException("Nincs kép")
+        return withContext(Dispatchers.Default) { hu.novaprocess.process.StarShape.measure(src) }
+    }
+
+    // ---------------------------------------------------------------- bejövő megosztás (Megosztás → NovaProcess)
+    /** 1 kép → szerkesztő; több → kockalista. A NovaRoot fogyasztja. */
+    val incoming = MutableStateFlow<List<Uri>?>(null)
+    fun handleIncoming(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        if (uris.size == 1) openSingle(uris[0]) else addFrames(uris, replace = true)
+        incoming.value = uris
+    }
+    fun consumeIncoming() { incoming.value = null }
+
     // ---------------------------------------------------------------- automata szerkesztés
     data class AutoState(val running: Boolean = false, val result: AutoEditor.Result? = null, val error: String? = null)
     val auto = MutableStateFlow(AutoState())
@@ -494,6 +530,24 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------------------------------------------------------- export
     val exportAnnotations = MutableStateFlow(false)
+    val exportSize = MutableStateFlow(ExportSize.ORIGINAL)
+
+    /** Méret-preset: hosszabb oldal skálázása, négyzet/portré esetén középre vágás. */
+    private fun sized(b: Bitmap): Bitmap {
+        val sp = exportSize.value
+        if (sp == ExportSize.ORIGINAL) return b
+        if (sp.h == 0) {
+            val sc = sp.w.toFloat() / maxOf(b.width, b.height); if (sc >= 1f) return b
+            return Bitmap.createScaledBitmap(b, (b.width * sc).toInt(), (b.height * sc).toInt(), true)
+        }
+        val targetAspect = sp.w.toFloat() / sp.h
+        val srcAspect = b.width.toFloat() / b.height
+        val cw: Int; val ch: Int
+        if (srcAspect > targetAspect) { ch = b.height; cw = (ch * targetAspect).toInt() } else { cw = b.width; ch = (cw / targetAspect).toInt() }
+        val crop = Bitmap.createBitmap(b, (b.width - cw) / 2, (b.height - ch) / 2, cw, ch)
+        return Bitmap.createScaledBitmap(crop, sp.w, sp.h, true)
+    }
+
     fun export(uri: Uri, format: ExportFormat, quality: Int = 95) {
         val src = source ?: return
         viewModelScope.launch {
@@ -505,6 +559,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                     cr.openOutputStream(uri)!!.use { os ->
                         when (format) {
                             ExportFormat.TIFF16 -> TiffWriter.write(out, os)
+                            ExportFormat.FITS32 -> hu.novaprocess.image.FitsWriter.write(out, os, mapOf("OBJECT" to caption.value.title, "DATE-OBS" to caption.value.date, "INSTRUME" to caption.value.instrument))
                             ExportFormat.PNG -> Watermark.apply(getApplication(), deco(out.toBitmap()), watermark.value).compress(Bitmap.CompressFormat.PNG, 100, os)
                             ExportFormat.JPEG -> Watermark.apply(getApplication(), deco(out.toBitmap()), watermark.value).compress(Bitmap.CompressFormat.JPEG, quality, os)
                             ExportFormat.FRAMED_JPEG -> framed(Watermark.apply(getApplication(), deco(out.toBitmap()), watermark.value)).compress(Bitmap.CompressFormat.JPEG, quality, os)
@@ -520,7 +575,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun deco(b: Bitmap): Bitmap = if (exportAnnotations.value) annotate(b) else b
+    private fun deco(b: Bitmap): Bitmap = sized(if (exportAnnotations.value) annotate(b) else b)
 
     /** Fekete keret + felirat: objektum · dátum · kockák × expozíció = integráció · eszköz · NovaProcess. */
     private fun framed(src: Bitmap): Bitmap {

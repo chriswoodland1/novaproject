@@ -55,6 +55,9 @@ data class ProcessParams(
     val wavelet2: Float = 0f,                 // 2 px
     val wavelet3: Float = 0f,                 // 4 px
     val waveletDenoise: Float = 0f,           // finom réteg zajküszöb 0..1
+    val clahe: Float = 0f,                    // helyi kontraszt (CLAHE) erőssége 0..1
+    val claheTiles: Int = 8,                  // csempék száma a rövidebb oldalon
+    val claheClip: Float = 2f,                // vágási határ (1 = nincs kiemelés, 4 = erős)
 
     // --- Fotó (nemlineáris térben, Lightroom-szerű) ---
     val exposure: Float = 0f,                 // EV, -3..3

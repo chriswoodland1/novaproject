@@ -36,6 +36,7 @@ object Processor {
         else if (p.starReduction > 0f) img = reduceStars(img, p.starReduction, p.starRadius)
         if (p.denoise > 0f) img = denoise(img, p.denoise, p.denoiseRadius)
         if (p.wavelet1 != 0f || p.wavelet2 != 0f || p.wavelet3 != 0f || p.waveletDenoise > 0f) img = wavelets(img, p)
+        if (p.clahe > 0f) img = clahe(img, p.clahe, p.claheTiles, p.claheClip)
         // --- görbék + fotós beállítások, opcionális maszkkal ---
         val base = if (p.maskMode != MaskMode.NONE) img.copy() else null
         if (p.curveShadows != 0f || p.curveMidtones != 0f || p.curveHighlights != 0f) img = curves(img, p)
@@ -43,6 +44,52 @@ object Processor {
         if (base != null) img = blendByMask(base, img, p)
         img.clampInPlace()
         return img
+    }
+
+    // ---------------------------------------------------------------- CLAHE (kontrasztkorlátos adaptív hisztogram-kiegyenlítés) a luminancián
+    fun clahe(src: FloatImage, amount: Float, tiles: Int, clip: Float): FloatImage {
+        val w = src.width; val h = src.height
+        val lum = src.toMono().data[0]
+        val t = tiles.coerceIn(2, 16)
+        val tw = (w + t - 1) / t; val th = (h + t - 1) / t
+        val nx = (w + tw - 1) / tw; val ny = (h + th - 1) / th
+        val bins = 256
+        // csempénkénti CDF
+        val cdf = Array(nx * ny) { FloatArray(bins) }
+        for (ty in 0 until ny) for (tx in 0 until nx) {
+            val hist = IntArray(bins)
+            val x0 = tx * tw; val y0 = ty * th; val x1 = minOf(w, x0 + tw); val y1 = minOf(h, y0 + th)
+            var n = 0
+            for (y in y0 until y1) for (x in x0 until x1) { hist[(lum[y * w + x].coerceIn(0f, 1f) * (bins - 1)).toInt()]++; n++ }
+            // vágás és újraelosztás
+            val limit = (clip * n / bins).toInt().coerceAtLeast(1)
+            var excess = 0
+            for (b in 0 until bins) if (hist[b] > limit) { excess += hist[b] - limit; hist[b] = limit }
+            val add = excess / bins; var rem = excess - add * bins
+            for (b in 0 until bins) { hist[b] += add; if (rem > 0) { hist[b]++; rem-- } }
+            var acc = 0f; val c = cdf[ty * nx + tx]
+            for (b in 0 until bins) { acc += hist[b]; c[b] = acc / n }
+        }
+        val out = src
+        val eq = FloatArray(w * h)
+        hu.novaprocess.image.Par.rows(h) { r0, r1 ->
+            for (y in r0 until r1) {
+                val fy = ((y + 0.5f) / th - 0.5f).coerceIn(0f, (ny - 1).toFloat()); val iy = fy.toInt().coerceAtMost(maxOf(0, ny - 2)); val ay = if (ny > 1) fy - iy else 0f
+                for (x in 0 until w) {
+                    val fx = ((x + 0.5f) / tw - 0.5f).coerceIn(0f, (nx - 1).toFloat()); val ix = fx.toInt().coerceAtMost(maxOf(0, nx - 2)); val ax = if (nx > 1) fx - ix else 0f
+                    val b = (lum[y * w + x].coerceIn(0f, 1f) * (bins - 1)).toInt()
+                    val c00 = cdf[iy * nx + ix][b]; val c10 = cdf[iy * nx + minOf(nx - 1, ix + 1)][b]
+                    val c01 = cdf[minOf(ny - 1, iy + 1) * nx + ix][b]; val c11 = cdf[minOf(ny - 1, iy + 1) * nx + minOf(nx - 1, ix + 1)][b]
+                    eq[y * w + x] = (c00 * (1 - ax) + c10 * ax) * (1 - ay) + (c01 * (1 - ax) + c11 * ax) * ay
+                }
+            }
+        }
+        for (c in 0 until out.channels) { val a = out.data[c]; for (i in a.indices) {
+            val l = lum[i]; val target = l + (eq[i] - l) * amount
+            val f = if (l > 1e-5f) target / l else 1f
+            a[i] = (a[i] * f.coerceIn(0.2f, 5f)).coerceIn(0f, 1f)
+        } }
+        return out
     }
 
     // ---------------------------------------------------------------- wavelet (à trous) élesítés, 3 réteg

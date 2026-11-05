@@ -33,6 +33,9 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -156,7 +159,10 @@ private val CATEGORIES: List<Pair<String, List<Tool>>> = listOf(
         Tool("w1", "Wavelet · finom (1 px)", 0f, 3f, get = { it.wavelet1 }, set = { p, v -> p.copy(wavelet1 = v) }),
         Tool("w2", "Wavelet · közepes (2 px)", 0f, 3f, get = { it.wavelet2 }, set = { p, v -> p.copy(wavelet2 = v) }),
         Tool("w3", "Wavelet · durva (4 px)", 0f, 3f, get = { it.wavelet3 }, set = { p, v -> p.copy(wavelet3 = v) }),
-        Tool("wd", "Wavelet zajküszöb", 0f, 1f, get = { it.waveletDenoise }, set = { p, v -> p.copy(waveletDenoise = v) })
+        Tool("wd", "Wavelet zajküszöb", 0f, 1f, get = { it.waveletDenoise }, set = { p, v -> p.copy(waveletDenoise = v) }),
+        Tool("clahe", "Helyi kontraszt (CLAHE)", 0f, 1f, get = { it.clahe }, set = { p, v -> p.copy(clahe = v) }),
+        Tool("clt", "CLAHE csempék", 2f, 16f, { "%.0f".format(it) }, get = { it.claheTiles.toFloat() }, set = { p, v -> p.copy(claheTiles = v.toInt()) }),
+        Tool("clc", "CLAHE vágás", 1f, 4f, { "%.1f".format(it) }, get = { it.claheClip }, set = { p, v -> p.copy(claheClip = v) })
     ),
     "Geometria" to listOf(
         Tool("rot", "Forgatás", get = { it.rotation.ordinal.toFloat() }, set = { p, v -> p.copy(rotation = Rotation.values()[v.toInt()]) },
@@ -187,6 +193,8 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     val solve by vm.solve.collectAsState()
     var imgBox by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     var showHist by remember { mutableStateOf(true) }
+    var showStarMap by remember { mutableStateOf(false) }
+    val pickCompare = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.loadCompare(uri) }
 
     LaunchedEffect(ui.message) { ui.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show(); vm.clearMessage() } }
 
@@ -203,12 +211,14 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     val tools = CATEGORIES[cat].second
     val tool = tools[toolIdx.coerceIn(0, tools.lastIndex)]
 
-    Column(Modifier.fillMaxSize().background(Color.Black)) {
-        // ----- kép (teljes szélesség, pinch zoom, nyomva tartás = eredeti) -----
-        var scale by remember { mutableFloatStateOf(1f) }
-        var offset by remember { mutableStateOf(Offset.Zero) }
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    val compare by vm.compare.collectAsState()
+    var split by remember { mutableFloatStateOf(0.5f) }
+
+    val imageArea: @Composable (Modifier) -> Unit = { imgMod ->
         Box(
-            Modifier.fillMaxWidth().weight(1f).background(Color.Black)
+            imgMod.background(Color.Black)
                 .pointerInput(Unit) { detectTransformGestures { _, pan, zoom, _ -> scale = (scale * zoom).coerceIn(1f, 8f); offset = if (scale == 1f) Offset.Zero else offset + pan } }
                 .onSizeChanged { imgBox = it }
                 .pointerInput(sampleMode) { detectTapGestures(
@@ -228,6 +238,19 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                     modifier = Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y)
                         .let { m -> if (night) m.graphicsLayer(alpha = 0.85f) else m })
             }
+            // A/B: a másik kép balról a csúszkáig, a kép fölé rajzolva
+            compare?.let { cb -> if (scale == 1f && bmp != null) {
+                androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                    val fit = fitRect(size.width, size.height, bmp.width.toFloat(), bmp.height.toFloat())
+                    val cut = fit[0] + fit[2] * split
+                    clipRect(left = 0f, top = 0f, right = cut, bottom = size.height) {
+                        drawImage(cb.asImageBitmap(), dstOffset = androidx.compose.ui.unit.IntOffset(fit[0].toInt(), fit[1].toInt()), dstSize = androidx.compose.ui.unit.IntSize(fit[2].toInt(), fit[3].toInt()))
+                    }
+                    drawLine(Color.White, Offset(cut, fit[1]), Offset(cut, fit[1] + fit[3]), strokeWidth = 2f)
+                }
+                androidx.compose.material3.Slider(value = split, onValueChange = { split = it }, modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(0.7f).padding(bottom = 56.dp))
+                Text("A: összehasonlító  |  B: aktuális", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp).background(Color.Black.copy(alpha = 0.5f)).padding(4.dp))
+            } }
             // felső sáv a kép fölött
             Row(Modifier.align(Alignment.TopCenter).statusBarsPadding().fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Vissza", tint = cs.onSurface) }
@@ -243,6 +266,8 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                         androidx.compose.material3.DropdownMenuItem(text = { Text(if (sampleMode) "Mintapont mód kikapcsolása" else "Háttér-mintapontok (érintéssel)") }, onClick = { showMenu = false; sampleMode = !sampleMode })
                         if (p.bgSamples.isNotEmpty()) androidx.compose.material3.DropdownMenuItem(text = { Text("Mintapontok törlése (auto-rács)") }, onClick = { showMenu = false; vm.clearBgSamples() })
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Vízjel") }, onClick = { showMenu = false; showWatermark = true })
+                        androidx.compose.material3.DropdownMenuItem(text = { Text(if (compare == null) "Összehasonlítás képpel (A/B)…" else "Összehasonlítás kikapcsolása") }, onClick = { showMenu = false; if (compare == null) pickCompare.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*")) else vm.clearCompare() })
+                        androidx.compose.material3.DropdownMenuItem(text = { Text("Csillagalak-térkép (fókusz/dőlés)") }, onClick = { showMenu = false; showStarMap = true })
                     }
                 }
                 Spacer(Modifier.size(6.dp))
@@ -275,8 +300,11 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
             if (showHist) ui.histogram?.let { Histogram(it, Modifier.align(Alignment.BottomStart).padding(8.dp).fillMaxWidth(0.55f).background(Color.Black.copy(alpha = 0.35f))) }
         }
 
+    }
+
+    val toolsPanel: @Composable (Modifier) -> Unit = { toolsMod ->
         // ----- alsó eszközpanel -----
-        Column(Modifier.fillMaxWidth().background(cs.background).navigationBarsPadding()) {
+        Column(toolsMod.background(cs.background).navigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 CATEGORIES.forEachIndexed { i, (name, _) ->
                     Text(name, style = MaterialTheme.typography.bodyMedium, color = if (i == cat) cs.onBackground else cs.onSurfaceVariant,
@@ -315,9 +343,24 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
         }
     }
 
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+        if (maxWidth >= 840.dp) {
+            Row(Modifier.fillMaxSize()) {
+                imageArea(Modifier.weight(1f).fillMaxSize())
+                toolsPanel(Modifier.width(400.dp).fillMaxSize().verticalScroll(rememberScrollState()))
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                imageArea(Modifier.fillMaxWidth().weight(1f))
+                toolsPanel(Modifier.fillMaxWidth())
+            }
+        }
+    }
+
     if (showExport) ExportSheet(vm, ui.exporting, onWatermark = { showExport = false; showWatermark = true }) { showExport = false }
     if (showPresets) PresetSheet(vm) { showPresets = false }
     if (showWatermark) WatermarkSheet(vm) { showWatermark = false }
+    if (showStarMap) StarMapSheet(vm) { showStarMap = false }
     AutoEditSheet(vm)
 }
 
@@ -377,8 +420,8 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: ()
     val wm by vm.watermark.collectAsState()
     val cs = MaterialTheme.colorScheme
     var format by remember { mutableStateOf(ExportFormat.JPEG) }
-    val mime = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG -> "image/jpeg"; ExportFormat.PNG -> "image/png"; ExportFormat.TIFF16 -> "image/tiff" }
-    val ext = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG -> "jpg"; ExportFormat.PNG -> "png"; ExportFormat.TIFF16 -> "tif" }
+    val mime = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG -> "image/jpeg"; ExportFormat.PNG -> "image/png"; ExportFormat.TIFF16 -> "image/tiff"; ExportFormat.FITS32 -> "application/fits" }
+    val ext = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG -> "jpg"; ExportFormat.PNG -> "png"; ExportFormat.TIFF16 -> "tif"; ExportFormat.FITS32 -> "fits" }
     val cap by vm.caption.collectAsState()
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(mime)) { uri -> if (uri != null) { vm.export(uri, format); onClose() } }
     ModalBottomSheet(onDismissRequest = onClose, containerColor = cs.surface) {
@@ -389,6 +432,14 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: ()
                 Pill("PNG", format == ExportFormat.PNG) { format = ExportFormat.PNG }
                 Pill("TIFF 16 bit", format == ExportFormat.TIFF16) { format = ExportFormat.TIFF16 }
                 Pill("Keretes JPEG", format == ExportFormat.FRAMED_JPEG) { format = ExportFormat.FRAMED_JPEG }
+                Pill("FITS 32 bit", format == ExportFormat.FITS32) { format = ExportFormat.FITS32 }
+            }
+            val sizeP by vm.exportSize.collectAsState()
+            if (format != ExportFormat.TIFF16 && format != ExportFormat.FITS32) {
+                Text("Méret", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    hu.novaprocess.vm.ExportSize.values().forEach { sp -> Pill(sp.label, sizeP == sp) { vm.exportSize.value = sp } }
+                }
             }
             if (format == ExportFormat.FRAMED_JPEG) {
                 androidx.compose.material3.OutlinedTextField(value = cap.title, onValueChange = { vm.caption.value = cap.copy(title = it) }, label = { Text("Objektum") }, singleLine = true, modifier = Modifier.fillMaxWidth())
