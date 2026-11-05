@@ -29,6 +29,8 @@ data class ProcessParams(
     val starRadius: Int = 2,                  // 1..5 px
     val denoise: Float = 0f,                  // 0..1
     val denoiseRadius: Int = 2,
+    val chromaDenoise: Float = 0f,            // színzaj-szűrés 0..1 (csak a színinformációt simítja)
+    val chromaRadius: Int = 4,
 
     // --- 1.2: haladó asztro ---
     val scnr: Float = 0f,                     // zöld-elnyomás 0..1

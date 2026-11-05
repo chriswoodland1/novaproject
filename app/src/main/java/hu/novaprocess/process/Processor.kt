@@ -34,6 +34,7 @@ object Processor {
         // --- csillagok ---
         if (p.starless) img = starlessComposite(img, p)
         else if (p.starReduction > 0f) img = reduceStars(img, p.starReduction, p.starRadius)
+        if (p.chromaDenoise > 0f) img = chromaDenoise(img, p.chromaDenoise, p.chromaRadius)
         if (p.denoise > 0f) img = denoise(img, p.denoise, p.denoiseRadius)
         if (p.wavelet1 != 0f || p.wavelet2 != 0f || p.wavelet3 != 0f || p.waveletDenoise > 0f) img = wavelets(img, p)
         if (p.clahe > 0f) img = clahe(img, p.clahe, p.claheTiles, p.claheClip)
@@ -594,6 +595,22 @@ object Processor {
             for (d in -r..r) { val yy = (y + d).coerceIn(0, h - 1); val s = tmp[yy * w + x]; v = if (isMin) min(v, s) else max(v, s) }
             out[y * w + x] = v
           }
+        }
+        return out
+    }
+
+    // ---------------------------------------------------------------- színzaj-szűrés (chroma)
+    /** A luminanciát érintetlenül hagyja; a csatornák luminanciához viszonyított eltérését (színt) simítja. */
+    fun chromaDenoise(src: FloatImage, amount: Float, radius: Int): FloatImage {
+        if (src.channels != 3) return src
+        val w = src.width; val h = src.height; val n = src.size
+        val lum = src.toMono().data[0]
+        val out = src
+        for (c in 0 until 3) {
+            val a = out.data[c]
+            val diff = FloatArray(n) { a[it] - lum[it] }
+            val sm = boxBlur(boxBlur(diff, w, h, radius), w, h, radius)   // kétszeres box ≈ gauss
+            for (i in 0 until n) a[i] = (lum[i] + diff[i] + (sm[i] - diff[i]) * amount).coerceIn(0f, 1f)
         }
         return out
     }

@@ -175,7 +175,7 @@ object AutoEditor {
         // OSC (Bayer) képnél a háttér mindig kap semlegesítést a stretch előtt és után – a stretch a pici eltérést is erős castté erősíti
         notes += if (castMax > 0.03f) "Színcast a háttérben (${"%.0f".format(castMax * 100)}%) → háttér semlegesítés stretch előtt és után" else "Háttér semlegesítés (stretch előtt és után), hogy ne legyen színcast"
         p = p.copy(backgroundNeutralize = true, neutralizeAfterStretch = true)
-        if (a.stars >= 30) { notes += "${a.stars} csillag → fehéregyensúly csillagokra"; p = p.copy(whiteBalanceStars = true) }
+        if (a.stars >= 15) { notes += "${a.stars} csillag → fehéregyensúly csillagokra"; p = p.copy(whiteBalanceStars = true) }
         if (a.greenExcess > 0.06f) { notes += "Zöld többlet a jelben → SCNR"; p = p.copy(scnr = 0.6f) }
 
         // zaj / kockaszám
@@ -183,6 +183,10 @@ object AutoEditor {
         val denoise = when { frames in 1..15 -> 0.45f; snrLow -> 0.4f; frames in 16..40 -> 0.3f; else -> 0.2f }
         if (denoise > 0f) notes += "Zajszűrés ${"%.0f".format(denoise * 100)}% (${if (frames > 0) "$frames kocka" else "jel/zaj alapján"})"
         p = p.copy(denoise = denoise, denoiseRadius = if (denoise > 0.35f) 3 else 2)
+        // OSC színzaj: mindig szűrjük, a kockaszámtól függő erővel
+        val chroma = when { frames in 1..30 -> 0.8f; frames in 31..100 -> 0.65f; else -> 0.5f }
+        notes += "Színzaj-szűrés ${"%.0f".format(chroma * 100)}% (OSC színes szemcse ellen)"
+        p = p.copy(chromaDenoise = chroma, chromaRadius = 4)
 
         // csillagok mérete
         val bloat = a.fwhm > 4.5f

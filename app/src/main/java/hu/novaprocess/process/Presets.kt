@@ -21,9 +21,9 @@ object Presets {
 
     val builtIns: List<Preset> = listOf(
         Preset("Galaxis", ProcessParams(backgroundExtraction = true, backgroundNeutralize = true, whiteBalanceStars = true,
-            stretchMode = StretchMode.AUTO, mtfMidtones = 0.22f, hdrCompress = 0.35f, hdrRadius = 24, starReduction = 0.3f, denoise = 0.25f, clarity = 0.15f, saturation = 0.2f), true),
+            stretchMode = StretchMode.AUTO, mtfMidtones = 0.22f, hdrCompress = 0.35f, hdrRadius = 24, starReduction = 0.3f, denoise = 0.25f, chromaDenoise = 0.6f, clarity = 0.15f, saturation = 0.2f), true),
         Preset("Emissziós köd", ProcessParams(backgroundExtraction = true, backgroundNeutralize = true, scnr = 0.6f,
-            stretchMode = StretchMode.ASINH, asinhStrength = 250f, starless = true, starlessRadius = 4, starsBlend = 0.6f, nebulaBoost = 0.3f, denoise = 0.3f, vibrance = 0.3f), true),
+            stretchMode = StretchMode.ASINH, asinhStrength = 250f, starless = true, starlessRadius = 4, starsBlend = 0.6f, nebulaBoost = 0.3f, denoise = 0.3f, chromaDenoise = 0.6f, vibrance = 0.3f), true),
         Preset("Dual-band HOO", ProcessParams(backgroundExtraction = true, palette = Palette.HOO, paletteStrength = 1f,
             stretchMode = StretchMode.ASINH, asinhStrength = 300f, starless = true, starsBlend = 0.5f, nebulaBoost = 0.35f, denoise = 0.35f, saturation = 0.25f), true),
         Preset("Nyílthalmaz", ProcessParams(backgroundExtraction = true, backgroundNeutralize = true, whiteBalanceStars = true,

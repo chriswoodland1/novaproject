@@ -152,6 +152,8 @@ private val CATEGORIES: List<Pair<String, List<Tool>>> = listOf(
         Tool("mi", "Invertálás", get = { if (it.maskInvert) 1f else 0f }, set = { p, v -> p.copy(maskInvert = v > 0.5f) }, options = listOf("Ki" to 0f, "Be" to 1f))
     ),
     "Részlet" to listOf(
+        Tool("cdn", "Színzaj-szűrés", 0f, 1f, get = { it.chromaDenoise }, set = { p, v -> p.copy(chromaDenoise = v) }),
+        Tool("cdr", "Színzaj sugár", 2f, 10f, { "%.0f".format(it) }, get = { it.chromaRadius.toFloat() }, set = { p, v -> p.copy(chromaRadius = v.toInt()) }),
         Tool("dn", "Zajszűrés", 0f, 1f, get = { it.denoise }, set = { p, v -> p.copy(denoise = v) }),
         Tool("dnr", "Zajszűrés sugár", 1f, 4f, { "%.0f".format(it) }, get = { it.denoiseRadius.toFloat() }, set = { p, v -> p.copy(denoiseRadius = v.toInt()) }),
         Tool("clar", "Clarity", -1f, 1f, get = { it.clarity }, set = { p, v -> p.copy(clarity = v) }),
