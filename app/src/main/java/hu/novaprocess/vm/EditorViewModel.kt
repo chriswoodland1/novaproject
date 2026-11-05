@@ -17,6 +17,7 @@ import hu.novaprocess.library.LibraryEntry
 import hu.novaprocess.process.Presets
 import hu.novaprocess.process.AutoEditor
 import hu.novaprocess.process.Watermark
+import hu.novaprocess.work.ProcessingBus
 import java.io.File
 import hu.novaprocess.process.ProcessParams
 import hu.novaprocess.process.Processor
@@ -164,15 +165,22 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         if (uris.isEmpty() || stackState.value.running) return
         stackJob = viewModelScope.launch {
             stackState.update { it.copy(running = true, error = null, log = emptyList()) }
+            ProcessingBus.begin(getApplication(), "Stackelés")
             try {
-                val res = stackCore(uris) { p -> stackState.update { it.copy(progress = p) } }
+                val res = stackCore(uris) { p ->
+                    stackState.update { it.copy(progress = p) }
+                    ProcessingBus.progress("Stackelés · ${p.phase}", "${p.current} / ${p.total} ${p.detail}", if (p.total > 0) p.current * 100 / p.total else 0)
+                }
                 stackState.update { it.copy(running = false, log = res.log) }
+                ProcessingBus.done("Stack kész ✓", "${res.used} kocka · ${res.image.width}×${res.image.height} · koppints a szerkesztéshez")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 stackState.update { it.copy(running = false, error = "Megszakítva") }
+                ProcessingBus.failed("Stack megszakítva", "")
             } catch (e: Throwable) {
                 System.gc()
                 val msg = if (e is OutOfMemoryError) "Elfogyott a memória (${hu.novaprocess.NovaApp.maxHeapMb()} MB keret). Kapcsold be a 2×2 binninget vagy kevesebb kockával próbáld." else (e.message ?: e.toString())
                 stackState.update { it.copy(running = false, error = msg) }
+                ProcessingBus.failed("Stack sikertelen", msg)
             }
         }
     }
@@ -263,6 +271,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             pipeline.update { it.copy(running = true, error = null, done = emptyList()) }
             val ctx = getApplication<Application>()
+            ProcessingBus.begin(ctx, "Pipeline")
+            val totalJobs = pipeline.value.jobs.size
             val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, outputTree)
             try {
                 while (pipeline.value.jobs.isNotEmpty()) {
@@ -277,7 +287,11 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                     val good = FrameAnalyzer.autoReject(infos).filter { !it.rejected }
                     frames.value = FrameAnalyzer.autoReject(infos)
                     if (good.isEmpty()) { pipeline.update { it.copy(done = it.done + "${job.name}: nincs használható kocka", jobs = it.jobs.drop(1)) }; continue }
-                    val res = stackCore(good.map { it.uri }) { p -> pipeline.update { it.copy(detail = "${p.phase} ${p.current}/${p.total}") } }
+                    val jobIdx = totalJobs - pipeline.value.jobs.size
+                    val res = stackCore(good.map { it.uri }) { p ->
+                        pipeline.update { it.copy(detail = "${p.phase} ${p.current}/${p.total}") }
+                        ProcessingBus.progress("Pipeline ${jobIdx + 1}/$totalJobs · ${job.name}", "${p.phase} ${p.current}/${p.total}", if (p.total > 0) p.current * 100 / p.total else 0)
+                    }
                     pipeline.update { it.copy(detail = "Automata szerkesztés…") }
                     val auto = withContext(Dispatchers.Default) { AutoEditor.run(previewSource!!, caption.value.title.ifBlank { null }, res.used) }
                     params.value = auto.params
@@ -294,8 +308,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                     System.gc()
                 }
                 pipeline.update { it.copy(running = false, current = "", detail = "") }
-            } catch (e: kotlinx.coroutines.CancellationException) { pipeline.update { it.copy(running = false, error = "Megszakítva") } }
-            catch (e: Throwable) { System.gc(); pipeline.update { it.copy(running = false, error = (e.message ?: e.toString()), jobs = it.jobs.drop(1)) } }
+                ProcessingBus.done("Pipeline kész ✓", pipeline.value.done.joinToString("\n").ifBlank { "Nincs eredmény" })
+            } catch (e: kotlinx.coroutines.CancellationException) { pipeline.update { it.copy(running = false, error = "Megszakítva") }; ProcessingBus.failed("Pipeline megszakítva", "") }
+            catch (e: Throwable) { System.gc(); pipeline.update { it.copy(running = false, error = (e.message ?: e.toString()), jobs = it.jobs.drop(1)) }; ProcessingBus.failed("Pipeline hiba", e.message ?: e.toString()) }
         }
     }
 
@@ -306,8 +321,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         if (merge.value.running || entries.size < 2) return
         viewModelScope.launch {
             merge.value = MergeState(running = true)
+            ProcessingBus.begin(getApplication(), "Összevonás")
             try {
-                val r = hu.novaprocess.library.Merger.merge(getApplication(), entries) { st -> merge.update { it.copy(status = st) } }
+                val r = hu.novaprocess.library.Merger.merge(getApplication(), entries) { st -> merge.update { it.copy(status = st) }; ProcessingBus.progress("Összevonás", st, 0) }
+                ProcessingBus.done("Összevonás kész ✓", "${entries.size} éjszaka · ${r.totalFrames} kocka")
                 setSource(r.image, "Összevont · ${entries.size} éjszaka · ${r.image.width}×${r.image.height}")
                 caption.value = Caption(title = entries[0].title, date = java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date()), frames = r.totalFrames, exposure = if (r.totalFrames > 0) r.totalSec.toFloat() / r.totalFrames else 0f)
                 lastFrameCount = r.totalFrames
@@ -320,7 +337,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 merge.value = MergeState(log = r.log)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Throwable) { System.gc(); merge.value = MergeState(error = e.message ?: e.toString()) }
+            catch (e: Throwable) { System.gc(); merge.value = MergeState(error = e.message ?: e.toString()); ProcessingBus.failed("Összevonás sikertelen", e.message ?: "") }
         }
     }
 
@@ -410,9 +427,12 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         if (planetaryRunning.value) return
         planetaryJob = viewModelScope.launch {
             planetaryRunning.value = true; planetaryError.value = null
+            ProcessingBus.begin(getApplication(), "Bolygó / Hold stack")
             try {
-                val res = if (video != null) Planetary.stackVideo(getApplication<Application>(), video, planetaryOptions.value) { planetaryProgress.value = it }
-                           else Planetary.stackImages(getApplication<Application>(), images, planetaryOptions.value) { planetaryProgress.value = it }
+                val onP: (PlanetaryProgress) -> Unit = { planetaryProgress.value = it; ProcessingBus.progress("Bolygó / Hold · ${it.phase}", "${it.current} / ${it.total}", if (it.total > 0) it.current * 100 / it.total else 0) }
+                val res = if (video != null) Planetary.stackVideo(getApplication<Application>(), video, planetaryOptions.value, onP)
+                           else Planetary.stackImages(getApplication<Application>(), images, planetaryOptions.value, onP)
+                ProcessingBus.done("Bolygó stack kész ✓", "${res.used}/${res.total} kocka")
                 setSource(res.image, "Bolygó stack · ${res.used}/${res.total} kocka · ${res.image.width}×${res.image.height}")
                 // bolygóhoz a lineáris megjelenítés + wavelet a kiindulás
                 params.value = ProcessParams(stretchMode = hu.novaprocess.process.StretchMode.NONE, wavelet1 = 0.8f, wavelet2 = 0.6f, waveletDenoise = 0.2f)
@@ -425,7 +445,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                         libraryVersion.value++
                     }
                 }
-            } catch (e: Throwable) { System.gc(); planetaryError.value = if (e is OutOfMemoryError) "Elfogyott a memória – csökkentsd a munkafelbontást vagy a kockaszámot." else (e.message ?: e.toString()) }
+            } catch (e: Throwable) { System.gc(); planetaryError.value = if (e is OutOfMemoryError) "Elfogyott a memória – csökkentsd a munkafelbontást vagy a kockaszámot." else (e.message ?: e.toString()); ProcessingBus.failed("Bolygó stack sikertelen", planetaryError.value ?: "") }
             planetaryRunning.value = false; planetaryProgress.value = null
         }
     }

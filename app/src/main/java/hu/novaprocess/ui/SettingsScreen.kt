@@ -100,7 +100,8 @@ fun SettingsScreen(vm: EditorViewModel) {
         } else Text("Nincs rögzített összeomlás.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
 
         Text("Tippek", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 24.dp, bottom = 6.dp))
-        Text("• A szerkesztőben a képet nyomva tartva az eredetit látod; dupla érintés = nagyítás vissza.\n" +
+        Text("• Stack / pipeline közben nyugodtan válts másik appra: előtérbeli szolgáltatás viszi tovább, és értesítés jön, ha kész. Az appot a feladatlistából elhúzva viszont az Android leállítja.\n" +
+             "• A szerkesztőben a képet nyomva tartva az eredetit látod; dupla érintés = nagyítás vissza.\n" +
              "• A kockák rácsában a piros keretes kockák kimaradnak; érintésre visszaveheted őket.\n" +
              "• Drizzle 2× csak sok (50+) kockánál és teljes felbontásban ad látható részletet.\n" +
              "• 16 bites TIFF export a további szerkesztéshez (Siril, GIMP, Lightroom).",

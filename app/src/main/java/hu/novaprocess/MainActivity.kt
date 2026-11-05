@@ -94,6 +94,13 @@ fun NovaRoot(vm: EditorViewModel) {
             composable("library") { LibraryScreen(vm, onOpenEditor = { nav.navigate("edit") { launchSingleTop = true } }) }
             composable("settings") { SettingsScreen(vm) }
         }
+        // értesítési engedély (Android 13+), hogy a kész-értesítés megjelenhessen
+        val notifPerm = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { }
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        androidx.compose.runtime.LaunchedEffect(Unit) {
+            if (android.os.Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+                notifPerm.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
         // bejövő megosztás: 1 kép → szerkesztő, több → kockák
         val incoming by vm.incoming.collectAsState()
         androidx.compose.runtime.LaunchedEffect(incoming) {
