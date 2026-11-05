@@ -17,7 +17,9 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
+      # Az ubuntu-latest runneren előre telepített Android SDK van (ANDROID_HOME beállítva).
+      - name: Android SDK csomagok
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
 
       - uses: gradle/actions/setup-gradle@v4
         with:
