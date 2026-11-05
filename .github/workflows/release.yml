@@ -48,14 +48,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VER="${{ github.event.inputs.version }}"; VER="${VER#v}"
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            if git ls-remote --exit-code --tags origin "v$VER" >/dev/null 2>&1; then
-              echo "A v$VER tag már létezik – a kiadás erre a tagre készül."
-            else
-              git tag -a "v$VER" -m "NovaProcess $VER"
-              git push origin "v$VER"
-            fi
+            # A taget a Release létrehozása hozza létre (target_commitish) – nincs külön tag push.
           else
             TAG="${GITHUB_REF_NAME}"; VER="${TAG#v}"
           fi
@@ -78,6 +71,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.NOVA_VERSION_NAME }}
+          target_commitish: ${{ github.sha }}
           name: NovaProcess ${{ env.NOVA_VERSION_NAME }}
           files: dist/*.apk
           generate_release_notes: true
