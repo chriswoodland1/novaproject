@@ -153,7 +153,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                         val secs = good * (if (opts.binning == 2) 0.7 else 2.4) * (if (opts.method == StackMethod.MEAN) 1 else 2) * (if (opts.drizzle == 2) 1.8 else 1.0)
                         Text("≈ ${(secs / 60).toInt()} perc ${(secs % 60).toInt()} mp", style = MaterialTheme.typography.titleMedium)
                     }
-                    if (st.log.isNotEmpty()) TextButton(onClick = onOpenEditor) { Text("Szerkesztő →") }
+                    if (st.log.isNotEmpty()) TextButton(onClick = { vm.runAutoEdit(); onOpenEditor() }) { Text("✦ Automata szerkesztés") }
                     Button(onClick = { vm.startStack() }, enabled = good > 0, shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(containerColor = cs.primary, contentColor = cs.onPrimary),
                         modifier = Modifier.height(52.dp)) { Text("Stack", style = MaterialTheme.typography.titleMedium) }

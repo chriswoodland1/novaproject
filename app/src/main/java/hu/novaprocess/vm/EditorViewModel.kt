@@ -15,6 +15,8 @@ import hu.novaprocess.planetary.PlanetaryOptions
 import hu.novaprocess.planetary.PlanetaryProgress
 import hu.novaprocess.library.LibraryEntry
 import hu.novaprocess.process.Presets
+import hu.novaprocess.process.AutoEditor
+import hu.novaprocess.process.Watermark
 import java.io.File
 import hu.novaprocess.process.ProcessParams
 import hu.novaprocess.process.Processor
@@ -136,6 +138,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 setSource(res.image, "Stack · ${res.used} kocka · ${res.image.width}×${res.image.height}")
                 stackState.update { it.copy(running = false, log = res.log) }
                 captionFromFrames(res.used)
+                lastFrameCount = res.used
                 // könyvtárba: 16 bites TIFF + miniatűr
                 launch(Dispatchers.IO) {
                     runCatching {
@@ -178,6 +181,35 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    // ---------------------------------------------------------------- automata szerkesztés
+    data class AutoState(val running: Boolean = false, val result: AutoEditor.Result? = null, val error: String? = null)
+    val auto = MutableStateFlow(AutoState())
+    private var lastFrameCount = 0
+
+    /** Elemzés + javaslat az előnézeti képen; nem módosít, amíg nem fogadják el. */
+    fun runAutoEdit() {
+        val src = previewSource ?: return
+        if (auto.value.running) return
+        viewModelScope.launch {
+            auto.value = AutoState(running = true)
+            try {
+                val hint = caption.value.title.ifBlank { null }
+                val res = withContext(Dispatchers.Default) { AutoEditor.run(src, hint, lastFrameCount) }
+                auto.value = AutoState(result = res)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Throwable) { auto.value = AutoState(error = e.message ?: e.javaClass.simpleName) }
+        }
+    }
+    fun applyAuto() { auto.value.result?.let { applyPreset(it.params) }; auto.value = AutoState() }
+    fun dismissAuto() { auto.value = AutoState() }
+
+    // ---------------------------------------------------------------- vízjel
+    val watermark = MutableStateFlow(Watermark.load(app))
+    fun setWatermark(s: hu.novaprocess.process.WatermarkSettings) { watermark.value = s; Watermark.save(getApplication(), s) }
+    fun importWatermarkImage(uri: Uri): Boolean { val p = Watermark.importImage(getApplication(), uri) ?: return false; setWatermark(watermark.value.copy(mode = hu.novaprocess.process.WmMode.IMAGE, imagePath = p)); return true }
+    /** Kis előnézet a vízjellel (beállító laphoz). */
+    fun watermarkPreview(): Bitmap? = _ui.value.preview?.let { Watermark.apply(getApplication(), it.copy(Bitmap.Config.ARGB_8888, true), watermark.value) }
 
     // ---------------------------------------------------------------- felirat-adatok (keretes exporthoz)
     data class Caption(var title: String = "", var date: String = "", var frames: Int = 0, var exposure: Float = 0f, var instrument: String = "Seestar S30 Pro")
@@ -342,9 +374,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                     cr.openOutputStream(uri)!!.use { os ->
                         when (format) {
                             ExportFormat.TIFF16 -> TiffWriter.write(out, os)
-                            ExportFormat.PNG -> out.toBitmap().compress(Bitmap.CompressFormat.PNG, 100, os)
-                            ExportFormat.JPEG -> out.toBitmap().compress(Bitmap.CompressFormat.JPEG, quality, os)
-                            ExportFormat.FRAMED_JPEG -> framed(out.toBitmap()).compress(Bitmap.CompressFormat.JPEG, quality, os)
+                            ExportFormat.PNG -> Watermark.apply(getApplication(), out.toBitmap(), watermark.value).compress(Bitmap.CompressFormat.PNG, 100, os)
+                            ExportFormat.JPEG -> Watermark.apply(getApplication(), out.toBitmap(), watermark.value).compress(Bitmap.CompressFormat.JPEG, quality, os)
+                            ExportFormat.FRAMED_JPEG -> framed(Watermark.apply(getApplication(), out.toBitmap(), watermark.value)).compress(Bitmap.CompressFormat.JPEG, quality, os)
                         }
                     }
                 }

@@ -38,6 +38,8 @@ fun SettingsScreen(vm: EditorViewModel) {
     val night by vm.nightMode.collectAsState()
     var repo by remember { mutableStateOf(UpdateManager.repo(ctx)) }
     var trigger by remember { mutableIntStateOf(0) }
+    var showWm by remember { mutableStateOf(false) }
+    val wm by vm.watermark.collectAsState()
 
     Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 120.dp)) {
         Text("Beállítások", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(bottom = 14.dp))
@@ -51,6 +53,7 @@ fun SettingsScreen(vm: EditorViewModel) {
         }
         HorizontalDivider(color = cs.outline)
 
+        RowItem("Vízjel exportnál", when (wm.mode) { hu.novaprocess.process.WmMode.OFF -> "ki"; hu.novaprocess.process.WmMode.TEXT -> "szöveg"; hu.novaprocess.process.WmMode.IMAGE -> "logó" }) { showWm = true }
         RowItem("Verzió", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Indításkor legfeljebb 6 óránként ellenőrzi a GitHub Releases-t; új verziót engedély után tölt le és telepít.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
@@ -86,4 +89,5 @@ fun SettingsScreen(vm: EditorViewModel) {
             style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
     }
     UpdatePrompt(auto = false, manualTrigger = trigger)
+    if (showWm) WatermarkSheet(vm) { showWm = false }
 }

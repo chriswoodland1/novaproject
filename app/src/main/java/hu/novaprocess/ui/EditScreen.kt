@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Compare
 import androidx.compose.material.icons.filled.Download
@@ -175,6 +176,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     var showOriginal by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
     var showPresets by remember { mutableStateOf(false) }
+    var showWatermark by remember { mutableStateOf(false) }
     var showHist by remember { mutableStateOf(true) }
 
     LaunchedEffect(ui.message) { ui.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show(); vm.clearMessage() } }
@@ -212,6 +214,8 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
             Row(Modifier.align(Alignment.TopCenter).statusBarsPadding().fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Vissza", tint = cs.onSurface) }
                 Text(if (showOriginal) "EREDETI" else ui.sourceInfo, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f).padding(horizontal = 8.dp), maxLines = 1)
+                IconButton(onClick = { vm.runAutoEdit() }, modifier = Modifier.clip(CircleShape).background(cs.primary)) { Icon(Icons.Filled.AutoAwesome, contentDescription = "Automata szerkesztés", tint = cs.onPrimary) }
+                Spacer(Modifier.size(6.dp))
                 IconButton(onClick = { showPresets = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.Bookmarks, contentDescription = "Presetek", tint = cs.onSurface) }
                 Spacer(Modifier.size(6.dp))
                 IconButton(onClick = { showExport = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.Download, contentDescription = "Export", tint = cs.onSurface) }
@@ -260,8 +264,10 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
         }
     }
 
-    if (showExport) ExportSheet(vm, ui.exporting) { showExport = false }
+    if (showExport) ExportSheet(vm, ui.exporting, onWatermark = { showExport = false; showWatermark = true }) { showExport = false }
     if (showPresets) PresetSheet(vm) { showPresets = false }
+    if (showWatermark) WatermarkSheet(vm) { showWatermark = false }
+    AutoEditSheet(vm)
 }
 
 @Composable
@@ -310,7 +316,8 @@ private fun PresetSheet(vm: EditorViewModel, onClose: () -> Unit) {
 }
 
 @Composable
-private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onClose: () -> Unit) {
+private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: () -> Unit, onClose: () -> Unit) {
+    val wm by vm.watermark.collectAsState()
     val cs = MaterialTheme.colorScheme
     var format by remember { mutableStateOf(ExportFormat.JPEG) }
     val mime = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG -> "image/jpeg"; ExportFormat.PNG -> "image/png"; ExportFormat.TIFF16 -> "image/tiff" }
@@ -336,6 +343,10 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onClose: () -> 
                     androidx.compose.material3.OutlinedTextField(value = if (cap.frames > 0) cap.frames.toString() else "", onValueChange = { vm.caption.value = cap.copy(frames = it.toIntOrNull() ?: 0) }, label = { Text("Kockák") }, singleLine = true, modifier = Modifier.weight(1f))
                     androidx.compose.material3.OutlinedTextField(value = if (cap.exposure > 0f) "%.0f".format(cap.exposure) else "", onValueChange = { vm.caption.value = cap.copy(exposure = it.toFloatOrNull() ?: 0f) }, label = { Text("Expozíció (s)") }, singleLine = true, modifier = Modifier.weight(1f))
                 }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Vízjel: " + when (wm.mode) { hu.novaprocess.process.WmMode.OFF -> "ki"; hu.novaprocess.process.WmMode.TEXT -> "szöveg „${wm.text.take(18)}”"; hu.novaprocess.process.WmMode.IMAGE -> "logó" }, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                TextButton(onClick = onWatermark) { Text("Beállítás") }
             }
             Text("A teljes felbontású képre fut le minden beállítás; nagy stacknél ez több tíz másodperc.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             androidx.compose.material3.Button(onClick = { save.launch("novaprocess_${System.currentTimeMillis()}.$ext") }, enabled = !exporting, modifier = Modifier.fillMaxWidth().height(52.dp), shape = CircleShape) {
