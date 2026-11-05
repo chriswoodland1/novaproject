@@ -19,6 +19,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import kotlinx.coroutines.launch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -48,6 +49,19 @@ fun PipelineSheet(vm: EditorViewModel, onClose: () -> Unit) {
             prefs.edit().putString("pipeline_out", uri.toString()).apply(); outTree = uri
         }
     }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var scanning by remember { mutableStateOf(false) }
+    val addFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            runCatching { ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            scanning = true
+            scope.launch {
+                val n = runCatching { vm.enqueueFolder(uri) }.getOrDefault(0)
+                scanning = false
+                android.widget.Toast.makeText(ctx, if (n > 0) "$n munka felvéve a sorba" else "Nem találtam kockákat (legalább 2 kell mappánként)", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
     val addFrames = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) {
             uris.forEach { runCatching { ctx.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
@@ -73,8 +87,10 @@ fun PipelineSheet(vm: EditorViewModel, onClose: () -> Unit) {
                     if (!st.running) TextButton(onClick = { vm.removeJob(i) }) { Text("Törlés", color = cs.error) }
                 }
             }
+            Text("Több objektum egyszerre: válaszd ki a szülőmappát (pl. MyWorks) – minden almappa, amiben kockák vannak, külön munka lesz a saját nevével (FITS előnyben, utána .bin, TIFF, JPEG).", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { addFrames.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*")) }, enabled = !st.running) { Text("+ Kockák sorba") }
+                Button(onClick = { addFolder.launch(null) }, enabled = !st.running && !scanning) { Text(if (scanning) "Felmérés…" else "+ Mappa → munkák") }
+                OutlinedButton(onClick = { addFrames.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*")) }, enabled = !st.running) { Text("+ Fájlok") }
                 if (frames.isNotEmpty()) OutlinedButton(onClick = { vm.enqueueCurrentFrames() }, enabled = !st.running) { Text("+ Jelenlegi kockák") }
             }
             if (st.running) {

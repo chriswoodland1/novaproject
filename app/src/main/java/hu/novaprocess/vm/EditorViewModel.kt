@@ -265,6 +265,51 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun removeJob(i: Int) { pipeline.update { it.copy(jobs = it.jobs.filterIndexed { k, _ -> k != i }) } }
 
+    /**
+     * Egy (szülő)mappa → objektumonként külön munka: minden olyan almappa, amiben kockák vannak, egy munka lesz
+     * a mappa nevével (a `_sub` toldalék nélkül). Típus-prioritás mappánként: FITS > .bin > TIFF > JPEG/PNG.
+     * Visszaadja a felvett munkák számát.
+     */
+    suspend fun enqueueFolder(tree: Uri): Int = withContext(Dispatchers.IO) {
+        val ctx = getApplication<Application>()
+        val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, tree) ?: return@withContext 0
+        val groups = LinkedHashMap<String, MutableList<androidx.documentfile.provider.DocumentFile>>()
+        fun walk(d: androidx.documentfile.provider.DocumentFile, depth: Int, label: String) {
+            val files = d.listFiles()
+            val imgs = files.filter { !it.isDirectory }
+            if (imgs.isNotEmpty()) groups.getOrPut(label) { ArrayList() }.addAll(imgs)
+            if (depth < 3) files.filter { it.isDirectory }.forEach { sub ->
+                val n = sub.name ?: "mappa"
+                // a "_sub" almappa az objektum mappájához tartozik
+                val lbl = if (n.lowercase().endsWith("_sub") || n.lowercase() == "sub") label.ifBlank { n.removeSuffix("_sub") } else n
+                walk(sub, depth + 1, lbl)
+            }
+        }
+        walk(root, 0, root.name ?: "mappa")
+        var added = 0
+        val newJobs = ArrayList<PipelineJob>()
+        for ((label, files) in groups) {
+            fun ext(f: androidx.documentfile.provider.DocumentFile) = (f.name ?: "").substringAfterLast('.', "").lowercase()
+            fun isThumb(f: androidx.documentfile.provider.DocumentFile) = (f.name ?: "").lowercase().contains("_thn")
+            fun isStacked(f: androidx.documentfile.provider.DocumentFile) = (f.name ?: "").lowercase().contains("stacked")
+            val fits = files.filter { ext(it) in setOf("fit", "fits") && !isStacked(it) }
+            val bins = files.filter { ext(it) in setOf("bin", "raw") && hu.novaprocess.image.BinReader.inferLayout(it.length(), hu.novaprocess.image.BinReader.dimsOverride(ctx)) != null }
+            val tifs = files.filter { ext(it) in setOf("tif", "tiff") }
+            val jpgs = files.filter { ext(it) in setOf("jpg", "jpeg", "png") && !isThumb(it) && !isStacked(it) }
+            val (pick, type) = when {
+                fits.size >= 2 -> fits to "FITS"
+                bins.size >= 2 -> bins to "bin"
+                tifs.size >= 2 -> tifs to "TIFF"
+                jpgs.size >= 2 -> jpgs to "JPEG"
+                else -> continue
+            }
+            val name = label.removeSuffix("_sub").removeSuffix("-sub")
+            newJobs.add(PipelineJob("$name · $type (${pick.size})", pick.map { it.uri })); added++
+        }
+        pipeline.update { st -> st.copy(jobs = st.jobs + newJobs.filter { nj -> st.jobs.none { it.name == nj.name } }) }
+        added
+    }
+
     /** Minden sorban álló munkára: elemzés → stack → automata szerkesztés → export (JPEG + keretes) a kiválasztott mappába. */
     fun runPipeline(outputTree: Uri, framed: Boolean = true) {
         if (pipeline.value.running || pipeline.value.jobs.isEmpty()) return
