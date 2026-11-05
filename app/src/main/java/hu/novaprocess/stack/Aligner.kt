@@ -24,10 +24,11 @@ data class Transform(val angle: Float, val dx: Float, val dy: Float, val matches
  */
 object Aligner {
 
-    fun estimate(ref: List<Star>, tgt: List<Star>, w: Int, h: Int, tol: Float = 2.0f): Transform {
+    fun estimate(ref: List<Star>, tgt: List<Star>, w: Int, h: Int, tol: Float = 2.0f, wide: Boolean = false): Transform {
         if (ref.size < 3 || tgt.size < 3) return Transform.IDENTITY
         val cx = w / 2f; val cy = h / 2f
-        val r = ref.take(60); val t = tgt.take(60)
+        val take = if (wide) 110 else 60   // mozaiknál kevés a közös csillag → több jelölt
+        val r = ref.take(take); val t = tgt.take(take)
 
         data class Cand(val angle: Float, val dx: Float, val dy: Float)
         val cands = ArrayList<Cand>()

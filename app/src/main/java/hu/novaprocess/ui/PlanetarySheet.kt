@@ -57,6 +57,8 @@ fun PlanetarySheet(vm: EditorViewModel, onDone: () -> Unit, onClose: () -> Unit)
             SmallSlider("Kockák a videóból", opts.maxFrames.toFloat(), 20f, 600f, { "%.0f".format(it) }) { vm.planetaryOptions.value = opts.copy(maxFrames = it.toInt()) }
             SmallSlider("Legjobb kockák aránya", opts.keepPercent.toFloat(), 5f, 100f, { "%.0f %%".format(it) }) { vm.planetaryOptions.value = opts.copy(keepPercent = it.toInt()) }
             SmallSlider("Munkafelbontás (hosszabb oldal)", opts.workSide.toFloat(), 600f, 2400f, { "%.0f px".format(it) }) { vm.planetaryOptions.value = opts.copy(workSide = it.toInt()) }
+            CheckRow("Többpontos igazítás (légköri hullámzás kompenzálása, ${opts.apGrid}×${opts.apGrid} cella)", opts.multiPoint) { vm.planetaryOptions.value = opts.copy(multiPoint = it) }
+            if (opts.multiPoint) SmallSlider("Rács mérete", opts.apGrid.toFloat(), 2f, 8f, { "%.0f×%.0f".format(it, it) }) { vm.planetaryOptions.value = opts.copy(apGrid = it.toInt()) }
             progress?.let { p ->
                 LinearProgressIndicator(progress = { if (p.total > 0) p.current.toFloat() / p.total else 0f }, modifier = Modifier.fillMaxWidth())
                 Text("${p.phase} · ${p.current}/${p.total}", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)

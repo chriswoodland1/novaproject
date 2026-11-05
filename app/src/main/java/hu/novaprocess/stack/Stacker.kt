@@ -19,6 +19,7 @@ data class StackOptions(
     val sigmaHigh: Float = 3f,
     val binning: Int = 1,              // 1 = teljes felbontás, 2 = fél (gyors, kevesebb memória)
     val resolution: Resolution = Resolution.AUTO, // AUTO: teljes (sávos) ha a memória engedi, különben 2×2
+    val mosaic: Boolean = false,       // vászon bővítése az összes kocka lefedettségére (eltérő irányú kockák)
     val minMatches: Int = 6,           // ennél kevesebb csillag-egyezéssel a kocka kimarad
     val alignFrames: Boolean = true,
     val drizzle: Int = 1,              // 1 = ki, 2 = 2× felskálázott kimenet

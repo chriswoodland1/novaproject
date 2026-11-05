@@ -126,7 +126,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                         RowItem("Elvetés", when (opts.method) {
                             StackMethod.MEAN -> "Átlag"; StackMethod.SIGMA_CLIP -> "Sigma-clip %.1f / %.1f".format(opts.sigmaLow, opts.sigmaHigh)
                             StackMethod.WINSORIZED -> "Winsorized %.1f / %.1f".format(opts.sigmaLow, opts.sigmaHigh) }) { sheet = "rej" }
-                        RowItem("Igazítás", if (opts.alignFrames) "Csillag · forgatással" else "Ki") { sheet = "align" }
+                        RowItem("Igazítás", (if (opts.alignFrames) "Csillag · forgatással" else "Ki") + (if (opts.mosaic) " · mozaik" else "")) { sheet = "align" }
                         RowItem("Felbontás", when (opts.resolution) { Resolution.AUTO -> "Auto (teljes, ha fér)"; Resolution.FULL -> "Teljes · sávos"; Resolution.BIN2 -> "2×2 binning" } + (if (opts.drizzle == 2) " · drizzle 2×" else "")) { sheet = "res" }
                     }
                 }
@@ -196,6 +196,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                 "align" -> {
                     Text("Igazítás", style = MaterialTheme.typography.headlineMedium)
                     CheckRow("Csillag-alapú regisztráció (eltolás + forgatás)", opts.alignFrames) { vm.stackOptions.value = opts.copy(alignFrames = it) }
+                    CheckRow("Mozaik: vászon bővítése az összes kocka lefedettségére (eltérő irányba néző kockák; Teljes felbontás módban)", opts.mosaic) { vm.stackOptions.value = opts.copy(mosaic = it, resolution = if (it) Resolution.FULL else opts.resolution, binning = 1, drizzle = 1) }
                     SmallSlider("Min. csillag-egyezés", opts.minMatches.toFloat(), 3f, 20f, { "%.0f".format(it) }) { vm.stackOptions.value = opts.copy(minMatches = it.toInt()) }
                 }
                 "res" -> {

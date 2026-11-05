@@ -17,7 +17,9 @@ data class PlanetaryOptions(
     val maxFrames: Int = 200,       // videóból ennyi kockát veszünk egyenletesen
     val keepPercent: Int = 30,      // a legjobb X% kerül a stackbe
     val searchRadius: Int = 12,     // finom igazítás keresési sugara (px, a munkafelbontáson)
-    val workSide: Int = 1200        // munkafelbontás (hosszabb oldal)
+    val workSide: Int = 1200,       // munkafelbontás (hosszabb oldal)
+    val multiPoint: Boolean = true, // többpontos (AP) igazítás: rács-cellánként külön eltolás, légköri torzulás ellen
+    val apGrid: Int = 4             // rács mérete (4×4 cella az objektum befoglaló téglalapján)
 )
 
 data class PlanetaryProgress(val phase: String, val current: Int, val total: Int)
@@ -84,6 +86,8 @@ object Planetary {
         val refLum = ref.toMono().data[0]
         val (rcx, rcy) = centroid(refLum, w, h)
         val refSmall = downscaleArr(refLum, w, h, 4)
+        val bbox = brightBBox(refLum, w, h)
+        if (opts.multiPoint) log += "Többpontos igazítás: ${opts.apGrid}×${opts.apGrid} cella a ${bbox[2] - bbox[0]}×${bbox[3] - bbox[1]} px-es objektumon"
         val acc = FloatImage(w, h, ch)
         val cnt = IntArray(w * h)
         for ((i, f) in best.withIndex()) {
@@ -97,7 +101,10 @@ object Planetary {
             val (sdx, sdy) = bestShift(refSmall, small, w / 4, h / 4, dx / 4, dy / 4, opts.searchRadius / 4 + 1)
             dx = sdx * 4; dy = sdy * 4
             val (fdx, fdy) = bestShift(refLum, lum, w, h, dx, dy, 2)
-            accumulate(acc, cnt, f, fdx, fdy)
+            if (opts.multiPoint && bbox[2] - bbox[0] > 40 && bbox[3] - bbox[1] > 40) {
+                val field = localShifts(refLum, lum, w, h, bbox, opts.apGrid, fdx, fdy, 3)
+                accumulateWarped(acc, cnt, f, bbox, opts.apGrid, field)
+            } else accumulate(acc, cnt, f, fdx, fdy)
         }
         for (c in 0 until ch) { val a = acc.data[c]; for (i in a.indices) if (cnt[i] > 0) a[i] /= cnt[i] }
         log += "Kész: ${acc.width}×${acc.height}"
@@ -153,6 +160,73 @@ object Planetary {
             if (n > 0) { val v = sad / n; if (v < best) { best = v; bx = sx; by = sy } }
         }
         return Pair(bx, by)
+    }
+
+    /** A fényes (objektum) terület befoglaló téglalapja: [x0, y0, x1, y1]. */
+    private fun brightBBox(a: FloatArray, w: Int, h: Int): IntArray {
+        var x0 = w; var y0 = h; var x1 = 0; var y1 = 0
+        val thr = 0.08f
+        for (y in 0 until h) for (x in 0 until w) if (a[y * w + x] > thr) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y }
+        if (x1 <= x0 || y1 <= y0) return intArrayOf(0, 0, w, h)
+        return intArrayOf(x0, y0, x1 + 1, y1 + 1)
+    }
+
+    /** Cellánkénti eltolás a globális (dx,dy) körül ±r; eredmény: g×g (dx,dy) pár. */
+    private fun localShifts(ref: FloatArray, img: FloatArray, w: Int, h: Int, bbox: IntArray, g: Int, dx0: Int, dy0: Int, r: Int): Array<IntArray> {
+        val cw = (bbox[2] - bbox[0]) / g; val chh = (bbox[3] - bbox[1]) / g
+        val out = Array(g * g) { intArrayOf(dx0, dy0) }
+        for (gy in 0 until g) for (gx in 0 until g) {
+            val rx0 = bbox[0] + gx * cw; val ry0 = bbox[1] + gy * chh
+            val rx1 = rx0 + cw; val ry1 = ry0 + chh
+            var best = Float.MAX_VALUE; var bx = dx0; var by = dy0
+            for (dy in -r..r) for (dx in -r..r) {
+                val sx = dx0 + dx; val sy = dy0 + dy
+                var sad = 0f; var n = 0
+                var y = ry0; while (y < ry1) {
+                    val yy = y + sy; if (yy in 0 until h) {
+                        var x = rx0; while (x < rx1) {
+                            val xx = x + sx; if (xx in 0 until w) { sad += abs(ref[yy * w + xx] - img[y * w + x]); n++ }
+                            x += 2
+                        }
+                    }
+                    y += 2
+                }
+                if (n > 20) { val v = sad / n; if (v < best) { best = v; bx = sx; by = sy } }
+            }
+            out[gy * g + gx] = intArrayOf(bx, by)
+        }
+        return out
+    }
+
+    /** Akkumulálás a cellaközéppontok közt bilineárisan interpolált eltolásmezővel (sima, szakadásmentes). */
+    private fun accumulateWarped(acc: FloatImage, cnt: IntArray, f: FloatImage, bbox: IntArray, g: Int, field: Array<IntArray>) {
+        val w = acc.width; val h = acc.height
+        val cw = (bbox[2] - bbox[0]).toFloat() / g; val chh = (bbox[3] - bbox[1]).toFloat() / g
+        Par.rows(h) { y0, y1 ->
+            for (y in y0 until y1) {
+                // cella-koordináta (középpontokhoz igazítva), a bboxon kívül a szélső cellára szorítva
+                val fy = ((y - bbox[1]) / chh - 0.5f).coerceIn(0f, (g - 1).toFloat())
+                val gy0 = fy.toInt().coerceAtMost(g - 1); val gy1 = (gy0 + 1).coerceAtMost(g - 1); val ty = fy - gy0
+                for (x in 0 until w) {
+                    val fx = ((x - bbox[0]) / cw - 0.5f).coerceIn(0f, (g - 1).toFloat())
+                    val gx0 = fx.toInt().coerceAtMost(g - 1); val gx1 = (gx0 + 1).coerceAtMost(g - 1); val tx = fx - gx0
+                    val s00 = field[gy0 * g + gx0]; val s10 = field[gy0 * g + gx1]; val s01 = field[gy1 * g + gx0]; val s11 = field[gy1 * g + gx1]
+                    val sdx = (s00[0] * (1 - tx) + s10[0] * tx) * (1 - ty) + (s01[0] * (1 - tx) + s11[0] * tx) * ty
+                    val sdy = (s00[1] * (1 - tx) + s10[1] * tx) * (1 - ty) + (s01[1] * (1 - tx) + s11[1] * tx) * ty
+                    // a referencia (x,y) pixelhez a forrás (x - sdx, y - sdy) tartozik; bilineáris minta
+                    val srcX = x - sdx; val srcY = y - sdy
+                    if (srcX < 0f || srcY < 0f || srcX >= w - 1 || srcY >= h - 1) continue
+                    val ix = srcX.toInt(); val iy = srcY.toInt(); val ax = srcX - ix; val ay = srcY - iy
+                    val i00 = iy * w + ix
+                    val i = y * w + x
+                    for (c in 0 until acc.channels) {
+                        val a = f.data[c]
+                        acc.data[c][i] += (a[i00] * (1 - ax) + a[i00 + 1] * ax) * (1 - ay) + (a[i00 + w] * (1 - ax) + a[i00 + w + 1] * ax) * ay
+                    }
+                    cnt[i]++
+                }
+            }
+        }
     }
 
     private fun accumulate(acc: FloatImage, cnt: IntArray, f: FloatImage, dx: Int, dy: Int) {

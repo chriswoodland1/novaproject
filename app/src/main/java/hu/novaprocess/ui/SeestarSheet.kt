@@ -77,9 +77,17 @@ fun SeestarSheet(onPicked: (List<Uri>) -> Unit, onClose: () -> Unit) {
                     }) { Text("↑ Fel") }
                 }
                 val fits = entries.filter { !it.isDir && (it.name.lowercase().endsWith(".fit") || it.name.lowercase().endsWith(".fits")) }
-                if (fits.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { selected = fits.map { it.path }.toSet() }) { Text("Összes FITS (${fits.size})") }
-                    TextButton(onClick = { selected = emptySet() }) { Text("Semmi") }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (fits.isNotEmpty()) TextButton(onClick = { selected = fits.map { it.path }.toSet() }) { Text("Összes FITS (${fits.size})") }
+                    TextButton(enabled = !loading, onClick = {
+                        loading = true; error = null
+                        scope.launch {
+                            try { val all = SeestarSmb.collectFits(path!!); entries = all; selected = all.map { it.path }.toSet(); if (all.isEmpty()) error = "Nincs FITS ebben a mappában (almappákkal együtt)." }
+                            catch (e: Exception) { error = "Hiba: ${e.message}" }
+                            loading = false
+                        }
+                    }) { Text("Mappa szinkron (almappák)") }
+                    if (selected.isNotEmpty()) TextButton(onClick = { selected = emptySet() }) { Text("Semmi") }
                 }
                 LazyColumn(Modifier.fillMaxWidth().height(340.dp)) {
                     items(entries, key = { it.path }) { e ->

@@ -53,6 +53,21 @@ object SeestarSmb {
         out
     }
 
+    /** Rekurzív FITS-gyűjtés egy mappából (max. mélység 3) – pl. MyWorks/M31 → minden _sub kocka. */
+    suspend fun collectFits(path: String, depth: Int = 3, user: String? = null, pass: String? = null): List<SmbEntry> = withContext(Dispatchers.IO) {
+        val out = ArrayList<SmbEntry>()
+        fun walk(p: String, d: Int) {
+            val f = SmbFile(if (p.endsWith("/")) p else "$p/", ctx(user, pass))
+            for (e in f.listFiles() ?: emptyArray()) {
+                val n = e.name.lowercase()
+                if (e.isDirectory) { if (d > 0 && !n.contains("thumbnail")) walk(e.path, d - 1) }
+                else if (n.endsWith(".fit") || n.endsWith(".fits")) out.add(SmbEntry(e.name, e.path, false, runCatching { e.length() }.getOrDefault(0L), 0L))
+            }
+        }
+        walk(path, depth)
+        out.sortedBy { it.path }
+    }
+
     /** Alapértelmezett belépési pontok, amiket érdemes sorban próbálni. */
     val defaultHosts = listOf("seestar.local", "10.0.0.1", "seestar")
 }

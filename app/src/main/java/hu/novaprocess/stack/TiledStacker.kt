@@ -61,7 +61,7 @@ object TiledStacker {
             val ref = loadCal(frames[0])
             val w = ref.width; val h = ref.height
             val refLum = ref.luminanceBinned()
-            val refStars = if (opts.alignFrames) StarDetector.detect(refLum) else emptyList()
+            val refStars = if (opts.alignFrames) StarDetector.detect(refLum, maxStars = if (opts.mosaic) 300 else 200) else emptyList()
             log += "Teljes felbontás: ${w}×${h}, ${refStars.size} csillag (referencia)"
             ref.close()
 
@@ -73,44 +73,63 @@ object TiledStacker {
                 if (!opts.alignFrames || i == 0) { transforms[i] = Transform(0f, 0f, 0f, Int.MAX_VALUE); used++; continue }
                 val rf = try { loadCal(u) } catch (e: Exception) { log += "Nem olvasható: ${ImageLoader.displayName(context, u)}"; rejected++; continue }
                 if (rf.width != w || rf.height != h) { log += "Eltérő méret: ${ImageLoader.displayName(context, u)}"; rejected++; rf.close(); continue }
-                val tf2 = Aligner.estimate(refStars, StarDetector.detect(rf.luminanceBinned()), w / 2, h / 2)
+                val tf2 = Aligner.estimate(refStars, StarDetector.detect(rf.luminanceBinned(), maxStars = if (opts.mosaic) 300 else 200), w / 2, h / 2, wide = opts.mosaic)
                 rf.close()
                 if (tf2.matches < opts.minMatches) { log += "Elvetve (${tf2.matches} egyezés): ${ImageLoader.displayName(context, u)}"; rejected++; continue }
                 transforms[i] = Transform(tf2.angle, tf2.dx * 2f, tf2.dy * 2f, tf2.matches); used++
             }
             if (used == 0) throw IllegalStateException("Egyetlen kocka sem igazítható")
 
-            // --- sávméret a memóriakeretből ---
+            // --- vászon: alapból a referencia kerete; mozaiknál az összes kocka lefedettsége ---
+            val cx = w / 2f; val cy = h / 2f
+            var minX = 0f; var minY = 0f; var maxX = w.toFloat(); var maxY = h.toFloat()
+            if (opts.mosaic) for (tf in transforms.filterNotNull()) {
+                for ((sx, sy) in listOf(0f to 0f, w.toFloat() to 0f, 0f to h.toFloat(), w.toFloat() to h.toFloat())) {
+                    val (px, py) = tf.apply(sx, sy, cx, cy)
+                    if (px < minX) minX = px; if (py < minY) minY = py; if (px > maxX) maxX = px; if (py > maxY) maxY = py
+                }
+            }
             val heap = Runtime.getRuntime().maxMemory()
+            var outScale = 1f
+            var W = (maxX - minX).toInt(); var H = (maxY - minY).toInt()
+            while (W.toLong() * H * 12 > (heap * 0.4).toLong() && outScale > 0.26f) { outScale *= 0.5f; W = ((maxX - minX) * outScale).toInt(); H = ((maxY - minY) * outScale).toInt() }
+            val ox = -minX; val oy = -minY
+            if (opts.mosaic) log += "Mozaik vászon: ${W}×${H}" + (if (outScale < 1f) " (${"%.0f".format(outScale * 100)}%-os lépték a memória miatt)" else "")
+
+            // --- sávméret a memóriakeretből ---
             val needSigma = opts.method != StackMethod.MEAN && used >= 3
-            val perRowAcc = w.toLong() * (3 * 4 * (if (needSigma) 3 else 1) + 4 + (if (needSigma) 4 else 0))
+            val perRowAcc = W.toLong() * (3 * 4 * (if (needSigma) 3 else 1) + 4 + (if (needSigma) 4 else 0))
             val maxShift = transforms.filterNotNull().maxOfOrNull { abs(it.dy) + abs(sin(it.angle)) * w / 2f } ?: 0f
             val margin = maxShift.toInt() + 3
             val perRowSrc = w.toLong() * 12
             val rawBytes = w.toLong() * h * 4 + (dark?.size ?: 0) * 4L + (flatNorm?.size ?: 0) * 4L
-            val resultBytes = w.toLong() * h * 12
+            val resultBytes = W.toLong() * H * 12
             val free = (heap * 0.6).toLong() - rawBytes - resultBytes - 2L * margin * perRowSrc
             require(free > perRowAcc * 32) { "Nincs elég memória a teljes felbontású stackhez (${heap / 1048576} MB) – válassz 2×2 binninget" }
-            val bandH = (free / (perRowAcc + perRowSrc)).toInt().coerceIn(32, h)
-            val bands = (h + bandH - 1) / bandH
+            val bandH = (free / (perRowAcc + perRowSrc / outScale.toDouble()).toLong().coerceAtLeast(1)).toInt().coerceIn(32, H)
+            val bands = (H + bandH - 1) / bandH
             log += "Sávos feldolgozás: $bands sáv × $bandH sor, margó $margin"
 
-            val result = FloatImage(w, h, 3)
-            val cx = w / 2f; val cy = h / 2f
+            val result = FloatImage(W, H, 3)
             val passes = if (needSigma) 2 else 1
             var step = 0; val steps = bands * passes * used
 
+            val inv = 1f / outScale
             for (b in 0 until bands) {
-                val y0 = b * bandH; val y1 = minOf(h, y0 + bandH); val bh = y1 - y0
-                val mean = Array(3) { FloatArray(w * bh) }
-                val m2 = if (needSigma) Array(3) { FloatArray(w * bh) } else null
-                val count = IntArray(w * bh)
+                val y0 = b * bandH; val y1 = minOf(H, y0 + bandH); val bh = y1 - y0
+                val mean = Array(3) { FloatArray(W * bh) }
+                val m2 = if (needSigma) Array(3) { FloatArray(W * bh) } else null
+                val count = IntArray(W * bh)
+
+                // kimeneti pixel → referencia-koordináta (vászon-eltolás és lépték)
+                fun refX(x: Float) = x * inv - ox
+                fun refY(y: Float) = y * inv - oy
 
                 // forrás-sorok tartománya a sávhoz (inverz leképezés a sáv sarkaira, margóval)
                 fun srcRange(tf: Transform): Pair<Int, Int> {
                     val c = cos(-tf.angle); val s = sin(-tf.angle)
                     var lo = Float.MAX_VALUE; var hi = -Float.MAX_VALUE
-                    for ((px, py) in listOf(0f to y0.toFloat(), (w - 1).toFloat() to y0.toFloat(), 0f to (y1 - 1).toFloat(), (w - 1).toFloat() to (y1 - 1).toFloat())) {
+                    for ((px, py) in listOf(refX(0f) to refY(y0.toFloat()), refX((W - 1).toFloat()) to refY(y0.toFloat()), refX(0f) to refY((y1 - 1).toFloat()), refX((W - 1).toFloat()) to refY((y1 - 1).toFloat()))) {
                         val rx = px - cx - tf.dx; val ry = py - cy - tf.dy
                         val fy = s * rx + c * ry + cy
                         if (fy < lo) lo = fy; if (fy > hi) hi = fy
@@ -124,15 +143,16 @@ object TiledStacker {
                         coroutineContext.ensureActive()
                         val rf = loadCal(u)
                         val (sy0, sy1) = srcRange(tf)
+                        if (sy1 <= sy0 + 1) { continue }
                         val src = rf.rgbRows(sy0, sy1); rf.close()
-                        val reg = FloatImage(w, bh, 3)
+                        val reg = FloatImage(W, bh, 3)
                         val c = cos(-tf.angle); val s = sin(-tf.angle)
                         val sh = sy1 - sy0
                         Par.rows(bh) { r0, r1 ->
                             for (ry in r0 until r1) {
-                                val y = (ry + y0).toFloat()
-                                for (x in 0 until w) {
-                                    val rx = x - cx - tf.dx; val ryy = y - cy - tf.dy
+                                val y = refY((ry + y0).toFloat())
+                                for (x in 0 until W) {
+                                    val rx = refX(x.toFloat()) - cx - tf.dx; val ryy = y - cy - tf.dy
                                     val fx = c * rx - s * ryy + cx
                                     val fy = s * rx + c * ryy + cy - sy0
                                     if (fx < 0f || fy < 0f || fx >= w - 1 || fy >= sh - 1) continue
@@ -140,7 +160,7 @@ object TiledStacker {
                                     val i00 = yy0 * w + x0
                                     for (ch in 0 until 3) {
                                         val a = src.data[ch]
-                                        reg.data[ch][ry * w + x] = (a[i00] * (1 - ax) + a[i00 + 1] * ax) * (1 - ay) + (a[i00 + w] * (1 - ax) + a[i00 + w + 1] * ax) * ay
+                                        reg.data[ch][ry * W + x] = (a[i00] * (1 - ax) + a[i00 + 1] * ax) * (1 - ay) + (a[i00 + w] * (1 - ax) + a[i00 + w + 1] * ax) * ay
                                     }
                                 }
                             }
@@ -152,7 +172,7 @@ object TiledStacker {
                 // 1. menet: Welford
                 forEachRegistered { i, reg, _ ->
                     step++; onProgress(StackProgress("Sáv ${b + 1}/$bands · 1. menet", step, steps, ImageLoader.displayName(context, frames[i])))
-                    val n = w * bh
+                    val n = W * bh
                     for (k in 0 until n) if (reg.data[0][k] != 0f || reg.data[1][k] != 0f || reg.data[2][k] != 0f) count[k]++
                     for (ch in 0 until 3) {
                         val a = reg.data[ch]; val mu = mean[ch]; val sq = m2?.get(ch)
@@ -163,16 +183,16 @@ object TiledStacker {
                     }
                 }
                 if (!needSigma) {
-                    for (ch in 0 until 3) System.arraycopy(mean[ch], 0, result.data[ch], y0 * w, w * bh)
+                    for (ch in 0 until 3) System.arraycopy(mean[ch], 0, result.data[ch], y0 * W, W * bh)
                 } else {
                     val sigma = m2!!
                     for (ch in 0 until 3) { val a = sigma[ch]; for (k in a.indices) a[k] = if (count[k] > 1) sqrt(a[k] / (count[k] - 1)) else 0f }
-                    val sum = Array(3) { FloatArray(w * bh) }; val n2 = IntArray(w * bh)
+                    val sum = Array(3) { FloatArray(W * bh) }; val n2 = IntArray(W * bh)
                     forEachRegistered { i, reg, _ ->
                         step++; onProgress(StackProgress("Sáv ${b + 1}/$bands · 2. menet", step, steps, ImageLoader.displayName(context, frames[i])))
                         for (ch in 0 until 3) {
                             val a = reg.data[ch]; val mu = mean[ch]; val sg = sigma[ch]; val sm = sum[ch]
-                            Par.range(w * bh) { k0, k1 -> for (k in k0 until k1) {
+                            Par.range(W * bh) { k0, k1 -> for (k in k0 until k1) {
                                 val v = a[k]
                                 if (v == 0f && reg.data[0][k] == 0f && reg.data[1][k] == 0f && reg.data[2][k] == 0f) continue
                                 val d = v - mu[k]; val lim = (if (d < 0) opts.sigmaLow else opts.sigmaHigh) * sg[k]
@@ -181,7 +201,7 @@ object TiledStacker {
                             } }
                         }
                     }
-                    for (ch in 0 until 3) { val r = result.data[ch]; val sm = sum[ch]; val mu = mean[ch]; for (k in 0 until w * bh) r[y0 * w + k] = if (n2[k] > 0) sm[k] / n2[k] else mu[k] }
+                    for (ch in 0 until 3) { val r = result.data[ch]; val sm = sum[ch]; val mu = mean[ch]; for (k in 0 until W * bh) r[y0 * W + k] = if (n2[k] > 0) sm[k] / n2[k] else mu[k] }
                 }
                 System.gc()
             }
