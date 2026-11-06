@@ -45,7 +45,7 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-fun LibraryScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
+fun LibraryScreen(vm: EditorViewModel, onOpenEditor: () -> Unit, onOpenBatch: () -> Unit = {}) {
     val ctx = LocalContext.current
     val cs = MaterialTheme.colorScheme
     val version by vm.libraryVersion.collectAsState()
@@ -67,6 +67,7 @@ fun LibraryScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                 Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("Könyvtár", style = MaterialTheme.typography.headlineMedium)
                     Row {
+                        TextButton(onClick = onOpenBatch) { Text("Kötegelt felirat") }
                         TextButton(onClick = { selecting = !selecting; selected = emptySet() }) { Text(if (selecting) "Kész" else "Kijelölés") }
                         TextButton(onClick = { pick.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*")) }) { Text("Megnyitás") }
                     }

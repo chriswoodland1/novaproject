@@ -157,8 +157,9 @@ object AutoEditor {
     }
 
     // ------------------------------------------------------------------ szabályok + finomhangolás
-    fun run(src: FloatImage, nameHint: String?, frames: Int = 0): Result {
+    fun run(src: FloatImage, nameHint: String?, frames: Int = 0, displayReferred: Boolean = false): Result {
         val a = analyze(src, nameHint)
+        if (displayReferred) return runDisplayReferred(src, a)
         val bgAfterBe = a.bg   // a háttér-kivonás a mediánt megtartja
         val notes = ArrayList<String>()
         notes += "Objektum: ${a.type.label} (${a.typeSource})"
@@ -260,6 +261,25 @@ object AutoEditor {
         }
         if (lastCast > 0.05f) { p = p.copy(scnr = max(p.scnr, 0.5f)); measure(p); notes += "Maradék színcast a háttérben → SCNR" }
         notes += "Finomhangolás ($iters lépés): háttér ${"%.2f".format(med)}, kiégés ${"%.2f".format(clipFrac * 100)}%, háttér-színeltérés ${"%.0f".format(lastCast * 100)}%"
+        return Result(p, a, notes)
+    }
+
+    /** Kész (már megnyújtott, pl. Seestar) kép: nincs újranyújtás, csak visszafogott fotós finomítás. */
+    private fun runDisplayReferred(src: FloatImage, a: Analysis): Result {
+        val notes = ArrayList<String>()
+        notes += "Kész kép (JPEG/PNG): a meglévő feldolgozást megtartjuk, csak finomítunk"
+        notes += "Objektum: ${a.type.label} (${a.typeSource})"
+        var p = ProcessParams(stretchMode = StretchMode.NONE)
+        val castMax = a.cast.maxOf { abs(it) }
+        if (castMax > 0.04f) { notes += "Színcast a háttérben → semlegesítés"; p = p.copy(backgroundNeutralize = true) }
+        if (a.gradient > 10f) { notes += "Gradiens → sík háttér-kivonás"; p = p.copy(backgroundExtraction = true, backgroundDegree = 1) }
+        if (a.greenExcess > 0.06f) { notes += "Zöld többlet → SCNR"; p = p.copy(scnr = 0.5f) }
+        p = p.copy(chromaDenoise = 0.4f, denoise = 0.15f, clarity = 0.1f, vibrance = 0.15f, sharpen = 0.1f)
+        notes += "Enyhe színzaj-szűrés, clarity, vibrance, élesítés"
+        val probe = src.downscale(500)
+        val out = Processor.process(probe, p); val lum = out.toMono().data[0]; val med = Processor.median(lum)
+        if (med < 0.06f) { p = p.copy(shadows = 0.3f, exposure = 0.3f); notes += "Sötét kép → árnyékok emelése" }
+        else if (med > 0.35f) { p = p.copy(blacks = -0.3f, contrast = 0.1f); notes += "Világos háttér → feketék mélyítése" }
         return Result(p, a, notes)
     }
 

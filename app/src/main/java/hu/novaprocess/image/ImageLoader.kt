@@ -75,6 +75,16 @@ object ImageLoader {
         return Pair(load(context, uri, name), null)
     }
 
+    fun isDisplayReferred(name: String): Boolean { val n = name.lowercase(); return n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".png") || n.endsWith(".webp") }
+
+    /** Kész (már feldolgozott) kép betöltése úgy, ahogy van: sRGB értékek 0..1, gamma-konverzió nélkül. */
+    fun loadDisplayReferred(context: Context, uri: Uri, name: String = displayName(context, uri)): FloatImage {
+        if (!isDisplayReferred(name)) return load(context, uri, name)
+        val opts = BitmapFactory.Options().apply { inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888 }
+        val bmp = context.contentResolver.openInputStream(uri).use { ins -> BitmapFactory.decodeStream(ins, null, opts) } ?: throw IllegalArgumentException("Nem dekódolható kép: $name")
+        val img = FloatImage.fromBitmap(bmp); bmp.recycle(); return img
+    }
+
     /** Betölt egy FITS / JPEG / PNG / WebP / TIFF képet lineáris FloatImage-ként. */
     fun load(context: Context, uri: Uri, name: String = displayName(context, uri)): FloatImage {
         val cr = context.contentResolver

@@ -144,6 +144,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 Stacker.stack(getApplication<Application>(), uris, o.copy(binning = 2), progress)
             }
         } else Stacker.stack(getApplication<Application>(), uris, o.copy(binning = if (o.resolution == hu.novaprocess.stack.Resolution.BIN2) 2 else o.binning), progress)
+        displayReferred = false
         setSource(res.image, "Stack · ${res.used} kocka · ${res.image.width}×${res.image.height}")
         captionFromFrames(res.used)
         lastFrameCount = res.used
@@ -193,8 +194,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             _ui.update { it.copy(processing = true, message = null) }
             try {
                 val name = ImageLoader.displayName(getApplication<Application>(), uri)
-                val img = withContext(Dispatchers.IO) { ImageLoader.load(getApplication<Application>(), uri, name) }
-                setSource(img, "$name · ${img.width}×${img.height}")
+                val display = ImageLoader.isDisplayReferred(name)
+                val img = withContext(Dispatchers.IO) { if (display) ImageLoader.loadDisplayReferred(getApplication<Application>(), uri, name) else ImageLoader.load(getApplication<Application>(), uri, name) }
+                displayReferred = display
+                setSource(img, "$name · ${img.width}×${img.height}" + (if (display) " · kész kép" else ""))
                 caption.value = Caption(title = name.substringBeforeLast('.'), date = java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date()))
                 launch(Dispatchers.IO) {
                     runCatching {
@@ -371,6 +374,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val r = hu.novaprocess.library.Merger.merge(getApplication(), entries) { st -> merge.update { it.copy(status = st) }; ProcessingBus.progress("Összevonás", st, 0) }
                 ProcessingBus.done("Összevonás kész ✓", "${entries.size} éjszaka · ${r.totalFrames} kocka")
+                displayReferred = false
                 setSource(r.image, "Összevont · ${entries.size} éjszaka · ${r.image.width}×${r.image.height}")
                 caption.value = Caption(title = entries[0].title, date = java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date()), frames = r.totalFrames, exposure = if (r.totalFrames > 0) r.totalSec.toFloat() / r.totalFrames else 0f)
                 lastFrameCount = r.totalFrames
@@ -419,6 +423,92 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun consumeIncoming() { incoming.value = null }
 
+    // ---------------------------------------------------------------- kötegelt vízjel + adatfelirat
+    data class BatchItem(val uri: Uri, val name: String, val data: hu.novaprocess.process.InfoData)
+    data class BatchState(val items: List<BatchItem> = emptyList(), val running: Boolean = false, val done: Int = 0, val message: String? = null)
+    val batch = MutableStateFlow(BatchState())
+
+    /** Seestar fájlnév-minták: "Stacked_142_M 31_10.0s_IRCUT_20251104-223344.jpg", "M 31_…", "Light_M 31_10.0s_…". */
+    private fun infoFromName(name: String, lastModified: Long): hu.novaprocess.process.InfoData {
+        val base = name.substringBeforeLast('.')
+        var frames = 0; var exp = 0f; var obj = base; var date = ""
+        Regex("^Stacked_(\\d+)_(.+?)_(\\d+(?:\\.\\d+)?)s", RegexOption.IGNORE_CASE).find(base)?.let { m -> frames = m.groupValues[1].toInt(); obj = m.groupValues[2]; exp = m.groupValues[3].toFloat() }
+            ?: Regex("^(?:Light_)?(.+?)_(\\d+(?:\\.\\d+)?)s", RegexOption.IGNORE_CASE).find(base)?.let { m -> obj = m.groupValues[1]; exp = m.groupValues[2].toFloat() }
+            ?: run { obj = base.substringBefore("_").substringBefore("-") }
+        Regex("(20\\d{2})(\\d{2})(\\d{2})").find(base)?.let { m -> date = "${m.groupValues[1]}.${m.groupValues[2]}.${m.groupValues[3]}" }
+        if (date.isBlank() && lastModified > 0) date = java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date(lastModified))
+        obj = obj.replace('_', ' ').trim()
+        return hu.novaprocess.process.InfoData(obj, infoOverlay.value.city, date, caption.value.instrument.ifBlank { "Seestar S30 Pro" }, frames, exp)
+    }
+
+    fun batchAdd(uris: List<Uri>) {
+        val ctx = getApplication<Application>()
+        val existing = batch.value.items.map { it.uri }.toSet()
+        val items = uris.filter { it !in existing }.map { u ->
+            val name = ImageLoader.displayName(ctx, u)
+            val lm = runCatching { androidx.documentfile.provider.DocumentFile.fromSingleUri(ctx, u)?.lastModified() ?: 0L }.getOrDefault(0L)
+            BatchItem(u, name, infoFromName(name, lm))
+        }
+        batch.update { it.copy(items = it.items + items, message = null) }
+    }
+    fun batchAddFolder(tree: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val ctx = getApplication<Application>()
+            val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, tree) ?: return@launch
+            val files = ArrayList<androidx.documentfile.provider.DocumentFile>()
+            fun walk(d: androidx.documentfile.provider.DocumentFile, depth: Int) { for (f in d.listFiles()) { if (f.isDirectory) { if (depth < 2) walk(f, depth + 1) } else { val n = (f.name ?: "").lowercase(); if ((n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".png")) && !n.contains("_thn")) files.add(f) } } }
+            walk(root, 0)
+            withContext(Dispatchers.Main) { batchAdd(files.map { it.uri }) }
+        }
+    }
+    fun batchUpdate(uri: Uri, f: (hu.novaprocess.process.InfoData) -> hu.novaprocess.process.InfoData) { batch.update { st -> st.copy(items = st.items.map { if (it.uri == uri) it.copy(data = f(it.data)) else it }) } }
+    fun batchRemove(uri: Uri) { batch.update { st -> st.copy(items = st.items.filter { it.uri != uri }) } }
+
+    private fun decodeForBatch(uri: Uri, maxSide: Int): Bitmap? {
+        val cr = getApplication<Application>().contentResolver
+        val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        cr.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, o) }
+        var sample = 1
+        while (maxOf(o.outWidth, o.outHeight) / sample > maxSide) sample *= 2
+        val o2 = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888; inMutable = true }
+        return cr.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, o2) }
+    }
+
+    /** Előnézet a galériához (lekicsinyítve, vízjel + felirat). */
+    fun batchPreview(item: BatchItem): Bitmap? {
+        val b = decodeForBatch(item.uri, 1400) ?: return null
+        val withInfo = hu.novaprocess.process.InfoOverlay.apply(b, infoOverlay.value, item.data.copy(city = item.data.city.ifBlank { infoOverlay.value.city }))
+        return Watermark.apply(getApplication(), withInfo, watermark.value)
+    }
+
+    /** Teljes felbontású export minden képre a kiválasztott mappába. */
+    fun batchExport(outTree: Uri) {
+        if (batch.value.running) return
+        viewModelScope.launch {
+            batch.update { it.copy(running = true, done = 0, message = null) }
+            val ctx = getApplication<Application>()
+            ProcessingBus.begin(ctx, "Kötegelt felirat")
+            val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, outTree)
+            var ok = 0
+            try {
+                for ((i, item) in batch.value.items.withIndex()) {
+                    withContext(Dispatchers.Default) {
+                        val b = decodeForBatch(item.uri, 8000) ?: return@withContext
+                        val out = Watermark.apply(ctx, hu.novaprocess.process.InfoOverlay.apply(b, infoOverlay.value, item.data.copy(city = item.data.city.ifBlank { infoOverlay.value.city })), watermark.value)
+                        val base = item.name.substringBeforeLast('.') + "_nova.jpg"
+                        tree?.createFile("image/jpeg", base)?.uri?.let { u -> ctx.contentResolver.openOutputStream(u)!!.use { out.compress(Bitmap.CompressFormat.JPEG, 95, it) }; ok++ }
+                        out.recycle()
+                    }
+                    batch.update { it.copy(done = i + 1) }
+                    ProcessingBus.progress("Kötegelt felirat", "${i + 1} / ${batch.value.items.size}", (i + 1) * 100 / batch.value.items.size)
+                    System.gc()
+                }
+                batch.update { it.copy(running = false, message = "Kész: $ok kép exportálva (_nova.jpg).") }
+                ProcessingBus.done("Kötegelt export kész ✓", "$ok kép")
+            } catch (e: Throwable) { System.gc(); batch.update { it.copy(running = false, message = "Hiba: ${e.message}") }; ProcessingBus.failed("Kötegelt export hiba", e.message ?: "") }
+        }
+    }
+
     // ---------------------------------------------------------------- automata szerkesztés
     data class AutoState(val running: Boolean = false, val result: AutoEditor.Result? = null, val error: String? = null)
     val auto = MutableStateFlow(AutoState())
@@ -432,7 +522,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             auto.value = AutoState(running = true)
             try {
                 val hint = solve.value.result?.annotations?.filter { it.type != "star" }?.maxByOrNull { it.radius }?.names?.firstOrNull() ?: caption.value.title.ifBlank { null }
-                val res = withContext(Dispatchers.Default) { AutoEditor.run(src, hint, lastFrameCount) }
+                val res = withContext(Dispatchers.Default) { AutoEditor.run(src, hint, lastFrameCount, displayReferred) }
                 auto.value = AutoState(result = res)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Throwable) { auto.value = AutoState(error = e.message ?: e.javaClass.simpleName) }
@@ -486,6 +576,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 val res = if (video != null) Planetary.stackVideo(getApplication<Application>(), video, planetaryOptions.value, onP)
                            else Planetary.stackImages(getApplication<Application>(), images, planetaryOptions.value, onP)
                 ProcessingBus.done("Bolygó stack kész ✓", "${res.used}/${res.total} kocka")
+                displayReferred = false
                 setSource(res.image, "Bolygó stack · ${res.used}/${res.total} kocka · ${res.image.width}×${res.image.height}")
                 // bolygóhoz a lineáris megjelenítés + wavelet a kiindulás
                 params.value = ProcessParams(stretchMode = hu.novaprocess.process.StretchMode.NONE, wavelet1 = 0.8f, wavelet2 = 0.6f, waveletDenoise = 0.2f)
@@ -514,8 +605,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val img = withContext(Dispatchers.IO) {
                     if (e.sourcePath != null) hu.novaprocess.image.TiffReader.read(File(e.sourcePath).inputStream())
-                    else ImageLoader.load(getApplication<Application>(), Uri.parse(e.sourceUri!!))
+                    else { val n = ImageLoader.displayName(getApplication<Application>(), Uri.parse(e.sourceUri!!)); if (ImageLoader.isDisplayReferred(n)) ImageLoader.loadDisplayReferred(getApplication<Application>(), Uri.parse(e.sourceUri), n) else ImageLoader.load(getApplication<Application>(), Uri.parse(e.sourceUri)) }
                 }
+                displayReferred = e.sourcePath == null && ImageLoader.isDisplayReferred(ImageLoader.displayName(getApplication<Application>(), Uri.parse(e.sourceUri!!)))
                 setSource(img, "${e.title} · ${img.width}×${img.height}")
                 currentEntryId = e.id
                 runCatching { Presets.gson.fromJson(e.paramsJson, ProcessParams::class.java) }.getOrNull()?.let { p -> params.value = p; schedulePreview(immediate = true) }
@@ -534,14 +626,19 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     fun recipeJson(): String = Presets.toJson(params.value)
     fun loadRecipe(json: String): Boolean = runCatching { applyPreset(Presets.fromJson(json)); true }.getOrDefault(false)
 
+    /** Kész (JPEG/PNG) kép: nincs automatikus stretch, 1:1 megjelenítés. Stack / FITS / TIFF: lineáris út autostretch-csel. */
+    var displayReferred: Boolean = false
+        private set
+    private fun defaultParams(): ProcessParams = if (displayReferred) ProcessParams(stretchMode = hu.novaprocess.process.StretchMode.NONE) else ProcessParams()
+
     private fun setSource(img: FloatImage, info: String) {
         source = img
         previewSource = img.downscale(PREVIEW_SIDE)
         undo.clear(); redo.clear()
-        params.value = ProcessParams()
+        params.value = defaultParams()
         _ui.update { it.copy(hasImage = true, sourceInfo = info, canUndo = false, canRedo = false) }
         viewModelScope.launch {
-            val orig = withContext(Dispatchers.Default) { Processor.process(previewSource!!, ProcessParams()).toBitmap() }
+            val orig = withContext(Dispatchers.Default) { Processor.process(previewSource!!, defaultParams()).toBitmap() }
             _ui.update { it.copy(originalPreview = orig) }
         }
         schedulePreview(immediate = true)
@@ -587,7 +684,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(canUndo = true, canRedo = redo.isNotEmpty()) }
         schedulePreview(immediate = true)
     }
-    fun resetParams() { commitParams { ProcessParams() } }
+    fun resetParams() { commitParams { defaultParams() } }
 
     private fun schedulePreview(immediate: Boolean = false) {
         val src = previewSource ?: return

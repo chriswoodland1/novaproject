@@ -84,14 +84,15 @@ fun NovaRoot(vm: EditorViewModel) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route ?: "stack"
-    val hideBar = route == "edit"   // a szerkesztőben a kép a fő, saját alsó sávja van
+    val hideBar = route == "edit" || route == "batch"
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         NavHost(navController = nav, startDestination = "stack", modifier = Modifier.fillMaxSize()) {
             composable("stack") { StackScreen(vm, onOpenEditor = { nav.navigate("edit") { launchSingleTop = true } }) }
             composable("edit") { EditScreen(vm, onBack = { nav.popBackStack() }) }
-            composable("library") { LibraryScreen(vm, onOpenEditor = { nav.navigate("edit") { launchSingleTop = true } }) }
+            composable("library") { LibraryScreen(vm, onOpenEditor = { nav.navigate("edit") { launchSingleTop = true } }, onOpenBatch = { nav.navigate("batch") { launchSingleTop = true } }) }
             composable("settings") { SettingsScreen(vm) }
+            composable("batch") { hu.novaprocess.ui.BatchBrandScreen(vm, onBack = { nav.popBackStack() }) }
         }
         // értesítési engedély (Android 13+), hogy a kész-értesítés megjelenhessen
         val notifPerm = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { }
