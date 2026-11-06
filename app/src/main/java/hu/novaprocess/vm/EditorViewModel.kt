@@ -424,17 +424,22 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeIncoming() { incoming.value = null }
 
     // ---------------------------------------------------------------- kötegelt vízjel + adatfelirat
-    data class BatchItem(val uri: Uri, val name: String, val data: hu.novaprocess.process.InfoData)
-    data class BatchState(val items: List<BatchItem> = emptyList(), val running: Boolean = false, val done: Int = 0, val message: String? = null)
+    data class BatchItem(val uri: Uri, val name: String, val data: hu.novaprocess.process.InfoData, val width: Int = 0, val height: Int = 0)
+    data class BatchState(val items: List<BatchItem> = emptyList(), val running: Boolean = false, val done: Int = 0, val message: String? = null, val png: Boolean = false)
     val batch = MutableStateFlow(BatchState())
 
     /** Seestar fájlnév-minták: "Stacked_142_M 31_10.0s_IRCUT_20251104-223344.jpg", "M 31_…", "Light_M 31_10.0s_…". */
     private fun infoFromName(name: String, lastModified: Long): hu.novaprocess.process.InfoData {
         val base = name.substringBeforeLast('.')
-        var frames = 0; var exp = 0f; var obj = base; var date = ""
+        var frames = 0; var exp = 0f; var obj = ""; var date = ""
         Regex("^Stacked_(\\d+)_(.+?)_(\\d+(?:\\.\\d+)?)s", RegexOption.IGNORE_CASE).find(base)?.let { m -> frames = m.groupValues[1].toInt(); obj = m.groupValues[2]; exp = m.groupValues[3].toFloat() }
-            ?: Regex("^(?:Light_)?(.+?)_(\\d+(?:\\.\\d+)?)s", RegexOption.IGNORE_CASE).find(base)?.let { m -> obj = m.groupValues[1]; exp = m.groupValues[2].toFloat() }
-            ?: run { obj = base.substringBefore("_").substringBefore("-") }
+        if (obj.isBlank()) Regex("^(?:Light_)?(.+?)_(\\d+(?:\\.\\d+)?)s", RegexOption.IGNORE_CASE).find(base)?.let { m -> obj = m.groupValues[1]; exp = m.groupValues[2].toFloat() }
+        // katalógusnév a fájlnév bármely részéből: M 31, NGC 6992, IC 410, SH2-171, C 33, Sh2 171 …
+        Regex("\\b(M|NGC|IC|SH2|Sh2|C|B|LDN|LBN|Abell|Cr|Mel)[ _-]?(\\d{1,5}[A-Za-z]?)\\b").find(base)?.let { m ->
+            val cat = m.groupValues[1].uppercase().let { if (it == "SH2") "Sh2" else it }
+            obj = (if (cat == "Sh2") "Sh2-" else "$cat ") + m.groupValues[2]
+        }
+        if (obj.isBlank()) obj = base.substringBefore("_").substringBefore("-")
         Regex("(20\\d{2})(\\d{2})(\\d{2})").find(base)?.let { m -> date = "${m.groupValues[1]}.${m.groupValues[2]}.${m.groupValues[3]}" }
         if (date.isBlank() && lastModified > 0) date = java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date(lastModified))
         obj = obj.replace('_', ' ').trim()
@@ -447,7 +452,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         val items = uris.filter { it !in existing }.map { u ->
             val name = ImageLoader.displayName(ctx, u)
             val lm = runCatching { androidx.documentfile.provider.DocumentFile.fromSingleUri(ctx, u)?.lastModified() ?: 0L }.getOrDefault(0L)
-            BatchItem(u, name, infoFromName(name, lm))
+            val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            runCatching { ctx.contentResolver.openInputStream(u)?.use { android.graphics.BitmapFactory.decodeStream(it, null, o) } }
+            BatchItem(u, name, infoFromName(name, lm), o.outWidth.coerceAtLeast(0), o.outHeight.coerceAtLeast(0))
         }
         batch.update { it.copy(items = it.items + items, message = null) }
     }
@@ -495,15 +502,16 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                     withContext(Dispatchers.Default) {
                         val b = decodeForBatch(item.uri, 8000) ?: return@withContext
                         val out = Watermark.apply(ctx, hu.novaprocess.process.InfoOverlay.apply(b, infoOverlay.value, item.data.copy(city = item.data.city.ifBlank { infoOverlay.value.city })), watermark.value)
-                        val base = item.name.substringBeforeLast('.') + "_nova.jpg"
-                        tree?.createFile("image/jpeg", base)?.uri?.let { u -> ctx.contentResolver.openOutputStream(u)!!.use { out.compress(Bitmap.CompressFormat.JPEG, 95, it) }; ok++ }
+                        val png = batch.value.png
+                        val base = item.name.substringBeforeLast('.') + (if (png) "_nova.png" else "_nova.jpg")
+                        tree?.createFile(if (png) "image/png" else "image/jpeg", base)?.uri?.let { u -> ctx.contentResolver.openOutputStream(u)!!.use { out.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, if (png) 100 else 97, it) }; ok++ }
                         out.recycle()
                     }
                     batch.update { it.copy(done = i + 1) }
                     ProcessingBus.progress("Kötegelt felirat", "${i + 1} / ${batch.value.items.size}", (i + 1) * 100 / batch.value.items.size)
                     System.gc()
                 }
-                batch.update { it.copy(running = false, message = "Kész: $ok kép exportálva (_nova.jpg).") }
+                batch.update { it.copy(running = false, message = "Kész: $ok kép exportálva (${if (it.png) "_nova.png, veszteségmentes" else "_nova.jpg, 97%"}).") }
                 ProcessingBus.done("Kötegelt export kész ✓", "$ok kép")
             } catch (e: Throwable) { System.gc(); batch.update { it.copy(running = false, message = "Hiba: ${e.message}") }; ProcessingBus.failed("Kötegelt export hiba", e.message ?: "") }
         }

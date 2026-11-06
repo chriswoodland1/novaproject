@@ -104,7 +104,9 @@ fun BatchBrandScreen(vm: EditorViewModel, onBack: () -> Unit) {
             }
             Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
                 preview?.let { Image(it.asImageBitmap(), contentDescription = item.name, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) } ?: CircularProgressIndicator(strokeWidth = 2.dp)
-                Text("${page + 1} / ${st.items.size} · ${item.name}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.align(Alignment.TopCenter).padding(6.dp).background(Color.Black.copy(alpha = 0.5f)).padding(4.dp))
+                Text("${page + 1} / ${st.items.size} · ${item.name} · forrás ${item.width}×${item.height}" + (if (maxOf(item.width, item.height) in 1..2000) "  ⚠ kis felbontás (nem az eredeti 4K?)" else ""),
+                    style = MaterialTheme.typography.labelSmall, color = if (maxOf(item.width, item.height) in 1..2000) Color(0xFFE8C547) else cs.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(6.dp).background(Color.Black.copy(alpha = 0.5f)).padding(4.dp))
             }
         }
 
@@ -122,7 +124,7 @@ fun BatchBrandScreen(vm: EditorViewModel, onBack: () -> Unit) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Pill("Felirat: ${if (info.enabled) "be" else "ki"}", info.enabled) { vm.setInfoOverlay(info.copy(enabled = !info.enabled)) }
                 listOf("Bal lent" to hu.novaprocess.process.WmPosition.BOTTOM_LEFT, "Jobb lent" to hu.novaprocess.process.WmPosition.BOTTOM_RIGHT, "Bal fent" to hu.novaprocess.process.WmPosition.TOP_LEFT, "Jobb fent" to hu.novaprocess.process.WmPosition.TOP_RIGHT).forEach { (l, pos) -> Pill(l, info.position == pos) { vm.setInfoOverlay(info.copy(position = pos)) } }
-                Pill("Eszköz mindenhol: ${item.data.instrument.ifBlank { "–" }}", false) { }
+                Pill(if (st.png) "PNG (veszteségmentes)" else "JPEG 97%", st.png) { vm.batch.value = st.copy(png = !st.png) }
                 TextButton(onClick = { vm.batchRemove(item.uri) }) { Text("Kép eltávolítása", color = cs.error) }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
