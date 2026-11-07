@@ -132,6 +132,7 @@ fun SeestarSheet(onPicked: (List<Uri>) -> Unit, onClose: () -> Unit) {
                 }
                 status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
             } else {
+                SeestarLivePanel(host)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text(path!!.removePrefix("smb://").take(48), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                     TextButton(onClick = {

@@ -65,6 +65,9 @@ object SeestarSmb {
     @Volatile private var workingMode: String = "guest"
 
     // ------------------------------------------------------------------ hálózat-kötés
+    /** A Wi-Fi hálózat socket-gyára (a Seestar hotspotján nincs internet → ne a mobilnetre menjen a kapcsolat). */
+    fun wifiSocketFactory(context: Context): javax.net.SocketFactory = wifiNetwork(context)?.socketFactory ?: javax.net.SocketFactory.getDefault()
+
     private fun wifiNetwork(context: Context): Network? {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         return cm.allNetworks.firstOrNull { n -> cm.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true }

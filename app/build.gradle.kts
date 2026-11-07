@@ -86,6 +86,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("com.google.zxing:core:3.5.3")
+    // Seestar élő videó (RTSP)
+    implementation("androidx.media3:media3-exoplayer:1.5.1")
+    implementation("androidx.media3:media3-exoplayer-rtsp:1.5.1")
+    implementation("androidx.media3:media3-ui:1.5.1")
     // Seestar SMB megosztás böngészése (EMMC Images)
     implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
 }
