@@ -182,6 +182,8 @@ object AutoEditor {
     private const val D_NEBULA = 75f; private const val D_GALAXY = 55f; private const val D_STARFIELD = 65f
     private const val BODY_P90_TARGET = 72f / 255f
     private const val SKY_MEDIAN_TARGET = 10f / 255f
+    private const val EXTENDED_SKY_TARGET = 20f / 255f   // köd/galaxis, ha a maszk nem talál semmit: ne a csillagmező 10/255-je
+    private const val SKY_CAP = 24f / 255f               // halvány objektumnál ennél világosabb ég már szürkének hat
     private const val SKY_MEDIAN_CEIL = 22f / 255f   // photon-finish 18/255 MI-zajszűrt adaton; zajos adatnál kicsit világosabb ég, de nem foltos
     private const val SOLVE_TOL = 0.5f / 255f
 
@@ -232,13 +234,20 @@ object AutoEditor {
         val chMed = FloatArray(pre.channels) { Processor.median(pre.data[it]) }
         val medLin = chMed.min().coerceAtLeast(1e-5f)
         // objektum-maszk a lineáris képen (nyitás + elmosás, háttér + 2.5σ felett) – a p90-et ezen mérjük
+        // A küszöb az ELMOSOTT kép saját zajához mérve (korábban a nyers pixelzajhoz → a halvány, kiterjedt ködöt,
+        // pl. a Fátyol-ívet egyáltalán nem találta, és csillagmezőként sötétre húzta). Két léptékben: finom (r=3) és durva (r=6).
         val preLum = pre.toMono().data[0]
-        val bgL = Processor.median(preLum); val nz = (Processor.mad(preLum, bgL) * 1.4826f).coerceAtLeast(1e-6f)
-        val opened = Processor.boxBlur(openArr(preLum, pre.width, pre.height, 2), pre.width, pre.height, 3)
-        val mask = BooleanArray(preLum.size) { opened[it] > bgL + 2.5f * nz }
+        val openedRaw = openArr(preLum, pre.width, pre.height, 2)
+        val mask = BooleanArray(preLum.size)
+        for (r in intArrayOf(3, 6)) {
+            val bl = Processor.boxBlur(openedRaw, pre.width, pre.height, r)
+            val bm = Processor.median(bl); val bs = (Processor.mad(bl, bm) * 1.4826f).coerceAtLeast(1e-7f)
+            for (i in bl.indices) if (bl[i] > bm + 3f * bs) mask[i] = true
+        }
         val maskN = mask.count { it }
         val useBody = extended && maskN > preLum.size / 400
-        val targetLabel = if (useBody) "objektum p90 ≈ 72/255" else "ég medián ≈ 10/255"
+        val skyTarget = if (extended) EXTENDED_SKY_TARGET else SKY_MEDIAN_TARGET
+        val targetLabel = if (useBody) "objektum p90 ≈ 72/255 (${"%.1f".format(maskN * 100f / preLum.size)} % maszk)" else "ég medián ≈ ${"%.0f".format(skyTarget * 255)}/255"
 
         // feketepont: photon-finish 0.987·medián, DE legalább 2.8σ-val a medián alatt (teljes felbontású zaj) – így az ég
         // legfeljebb ~0.3 %-a vágódik feketére. (A photon-finish ezt GraXpert MI-zajszűrés után mérné, ott a zaj elhanyagolható.)
@@ -260,20 +269,20 @@ object AutoEditor {
             val out = Processor.process(probe, pp)
             val lum = out.toMono().data[0]
             val sky = Processor.percentile(lum, 0.5f)
-            val bodyVals = if (useBody) { val l = ArrayList<Float>(maskN); for (i in lum.indices) if (mask[i]) l.add(lum[i]); l.sort(); l[(l.size * 0.9f).toInt().coerceAtMost(l.size - 1)] } else sky
+            // az objektumot csillagmentesítve mérjük (nyitás), különben a maszkba eső csillagok határoznák meg a p90-et
+            val bodyVals = if (useBody) { val ol = openArr(lum, out.width, out.height, 2); val l = ArrayList<Float>(maskN); for (i in ol.indices) if (mask[i]) l.add(ol[i]); l.sort(); l[(l.size * 0.9f).toInt().coerceAtMost(l.size - 1)] } else sky
             var nb = 0; var cl = 0; var peg = 0
             for (i in lum.indices) { if (lum[i] <= 0.5f / 255f) nb++; if (lum[i] >= 0.995f) cl++ }
             if (out.channels == 3) for (i in lum.indices) { val r = out.data[0][i]; val g = out.data[1][i]; val b = out.data[2][i]; if ((r >= 0.995f || g >= 0.995f || b >= 0.995f) && min(r, min(g, b)) < 0.9f) peg++ }
             return M(sky, bodyVals, nb.toFloat() / lum.size, cl.toFloat() / lum.size, peg.toFloat() / lum.size)
         }
         var iters = 0
-        fun solve(): M {
+        fun solve(onBody: Boolean = useBody, target: Float = if (useBody) BODY_P90_TARGET else skyTarget): M {
             // m kisebb → világosabb; felezés: ha a metrika a cél alatt van, m-et csökkentjük
             var lo = 0.02f; var hi = 0.95f; var best = p.copy(mtfMid = 0.1f); var bestM = measure(best); var bestErr = Float.MAX_VALUE
-            val target = if (useBody) BODY_P90_TARGET else SKY_MEDIAN_TARGET
             for (i in 0 until 10) {
                 val m = (lo + hi) / 2f; val pp = p.copy(mtfMid = m); val mm = measure(pp); iters++
-                val v = if (useBody) mm.body else mm.sky
+                val v = if (onBody) mm.body else mm.sky
                 val err = abs(v - target)
                 if (err < bestErr) { bestErr = err; best = pp; bestM = mm }
                 if (err <= SOLVE_TOL) break
@@ -285,9 +294,18 @@ object AutoEditor {
         // kétpontos: túl világos ég → bp emelése (soha a medián fölé), újraoldás
         var twoPoint = 0
         // kétpontos: túl világos ég → bp közelebb a mediánhoz, de legalább 1.5σ-ra maradjon alatta
-        while (m.sky > SKY_MEDIAN_CEIL && kSig > 2.0f && twoPoint < 3) {
-            kSig = (kSig - 0.4f).coerceAtLeast(2.0f); p = p.copy(blackPoint = bpFor(kSig)); m = solve(); twoPoint++
+        while (m.sky > SKY_MEDIAN_CEIL && kSig > 2.4f && twoPoint < 2) {
+            kSig = (kSig - 0.4f).coerceAtLeast(2.4f); p = p.copy(blackPoint = bpFor(kSig)); m = solve(); twoPoint++
         }
+        // égplafon: halvány objektumnál a 72/255-ös cél túl világos, szürke eget adna → az ég legfeljebb ~24/255,
+        // az objektum annyi, amennyi ebből kijön (+ enyhe helyi kontraszt a filamentekre)
+        var skyCapped = false
+        if (useBody && m.sky > SKY_CAP) {
+            val bodyM = p.mtfMid
+            val capM = solve(onBody = false, target = SKY_CAP)
+            if (p.mtfMid > bodyM) { m = capM; skyCapped = true } else p = p.copy(mtfMid = bodyM)
+        }
+        if (skyCapped) { p = p.copy(clahe = 0.3f, claheTiles = 6, claheClip = 1.8f); m = measure(p); notes += "Halvány objektum: égplafon (${"%.0f".format(SKY_CAP * 255)}/255) a szürke ég ellen; objektum p90 ${"%.0f".format(m.body * 255)}/255 → enyhe helyi kontraszt (CLAHE 30 %)" }
         val clippedSky = 0.5f * erfc(kSig / 1.41421356f)
         notes += "Stretch: asinh (feketepont = medián − ${"%.1f".format(kSig)}σ, D = ${"%.0f".format(D)}) + MTF m = ${"%.3f".format(p.mtfMid)} (${targetLabel}; $iters mérés${if (twoPoint > 0) ", kétpontos bp-emelés ×$twoPoint" else ""}) · teljes felbontáson az ég ~${"%.1f".format(clippedSky * 100)} %-a fekete"
 
