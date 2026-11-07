@@ -156,111 +156,140 @@ object AutoEditor {
         return ((lo + hi) / 2f).coerceIn(2f, 1000f)
     }
 
-    // ------------------------------------------------------------------ szabályok + finomhangolás
+    // ------------------------------------------------------------------ photon-finish motor (MIT, Colin Bryar)
+    /**
+     * A Seestar "AI Enhance"-hez hasonló, mért (nem névalapú) fejlesztő motor – a nyílt forrású photon-finish
+     * (github.com/ColinB-WB/photon-finish, MIT) döntési szabályainak 1:1 portja a saját feldolgozónkra:
+     *  1. háttér-kivonás mindig (GraXpert-szerep → saját RBF/poly), semlegesítés mindig
+     *  2. zajszűrés kategória szerint: 0.5 alap, köd 0.6, csillagmező 0.6, galaxis 0.65, +0.1 ha zajos
+     *  3. szín: PCC (csillag-fehéregyensúly) csak galaxisnál; LP-ködnél és csillagmezőnél KI (ne legyen rózsaszín)
+     *  4. stretch: asinh bp = 0.987·medián, D = köd 75 / galaxis 55 / csillagmező 65, majd `mtf 0 m 1`,
+     *     ahol m-et felezéssel (0.02..0.25, tűrés 0.5/255, max 10 lépés) úgy oldjuk meg, hogy
+     *     a maszkolt objektum p90 ≈ 72/255 (kiterjedt) ill. az ég mediánja ≈ 10/255 (csillagmező);
+     *     kétpontos: ha az ég > 18/255, bp-t emeljük (soha a medián fölé) és újraoldjuk
+     *  5. telítettség: köd 0.60 / csillagmező 0.55 / galaxis 0.60
+     *  6. csillagcsökkentés (screen-blend k≈0.45) csak kiterjedt objektumnál; halmaznál soha
+     *  7. QA-kapuk: közel-fekete ≤ 2 %, ég-plafon, beragadt színcsatorna ≤ 20/10/15 % → telítettség 0.85×/0.70×
+     */
+    enum class Category(val label: String) { NEBULA("köd"), GALAXY("galaxis"), STARFIELD("csillagmező/halmaz") }
+
+    fun categoryOf(t: ObjectType): Category = when (t) {
+        ObjectType.GALAXY -> Category.GALAXY
+        ObjectType.EMISSION_NEBULA, ObjectType.REFLECTION_NEBULA, ObjectType.PLANETARY_NEBULA, ObjectType.UNKNOWN -> Category.NEBULA
+        ObjectType.GLOBULAR, ObjectType.OPEN_CLUSTER, ObjectType.STARFIELD -> Category.STARFIELD
+    }
+
+    private const val D_NEBULA = 75f; private const val D_GALAXY = 55f; private const val D_STARFIELD = 65f
+    private const val BODY_P90_TARGET = 72f / 255f
+    private const val SKY_MEDIAN_TARGET = 10f / 255f
+    private const val SKY_MEDIAN_CEIL = 18f / 255f
+    private const val SOLVE_TOL = 0.5f / 255f
+
     fun run(src: FloatImage, nameHint: String?, frames: Int = 0, displayReferred: Boolean = false): Result {
         val a = analyze(src, nameHint)
         if (displayReferred) return runDisplayReferred(src, a)
-        val bgAfterBe = a.bg   // a háttér-kivonás a mediánt megtartja
         val notes = ArrayList<String>()
-        notes += "Objektum: ${a.type.label} (${a.typeSource})"
-        var p = ProcessParams()
+        val cat = categoryOf(a.type)
+        notes += "Objektum: ${a.type.label} (${a.typeSource}) → kezelés: ${cat.label}"
+        notes += "Motor: photon-finish (MIT) mért döntési szabályai – nem névből, hanem a kép méréseiből"
+        val extended = cat != Category.STARFIELD
+        val lpLike = a.extendedHue.startsWith("vörös")          // Hα-domináns jel ≈ LP-szűrős köd
+        val noisy = a.dynRange < 15f || frames in 1..15
 
-        // háttér-gradiens
-        p = when {
-            a.gradient > 12f -> { notes += "Erős gradiens (${"%.0f".format(a.gradient)}σ) → másodfokú háttér-kivonás"; p.copy(backgroundExtraction = true, backgroundDegree = 2) }
-            a.gradient > 4f -> { notes += "Enyhe gradiens → sík háttér-kivonás"; p.copy(backgroundExtraction = true, backgroundDegree = 1) }
-            else -> { notes += "Egyenletes háttér, nincs gradiens-kivonás"; p }
+        // 1. háttér + semlegesítés (mindig)
+        var p = ProcessParams(backgroundExtraction = true, backgroundDegree = if (a.gradient > 12f) 2 else 1, backgroundNeutralize = true, neutralizeAfterStretch = true)
+        notes += "Égbolt-glow kivonás (${if (p.backgroundDegree == 2) "másodfokú" else "sík"}, gradiens ${"%.0f".format(a.gradient)}σ) + háttér semlegesítés"
+
+        // 2. zajszűrés
+        var dn = when (cat) { Category.NEBULA -> 0.6f; Category.STARFIELD -> 0.6f; Category.GALAXY -> 0.65f }
+        if (noisy) dn += 0.1f
+        p = p.copy(denoise = dn.coerceAtMost(0.8f), denoiseRadius = if (dn > 0.6f) 3 else 2, chromaDenoise = if (noisy) 0.8f else 0.6f, chromaRadius = 4)
+        notes += "Zajszűrés ${"%.0f".format(dn * 100)}%${if (noisy) " (+10% zajos/rövid)" else ""} + színzaj-szűrés"
+
+        // 3. szín
+        when {
+            cat == Category.GALAXY -> { p = p.copy(whiteBalanceStars = a.stars >= 15); notes += "Galaxis: fotometriai jellegű színkorrekció (csillag-fehéregyensúly), hogy ne legyen narancs" }
+            cat == Category.NEBULA && lpLike -> notes += "Hα-domináns köd: színkorrekció KI – a Seestar vörös marad vörös, nem rózsaszín"
+            cat == Category.NEBULA -> { p = p.copy(whiteBalanceStars = a.stars >= 15); notes += "Köd (szélessávú): csillag-fehéregyensúly" }
+            else -> notes += "Halmaz/csillagmező: színkorrekció KI (különben rózsaszínbe fordul)"
         }
-        // színcast
-        val castMax = a.cast.maxOf { abs(it) }
-        // OSC (Bayer) képnél a háttér mindig kap semlegesítést a stretch előtt és után – a stretch a pici eltérést is erős castté erősíti
-        notes += if (castMax > 0.03f) "Színcast a háttérben (${"%.0f".format(castMax * 100)}%) → háttér semlegesítés stretch előtt és után" else "Háttér semlegesítés (stretch előtt és után), hogy ne legyen színcast"
-        p = p.copy(backgroundNeutralize = true, neutralizeAfterStretch = true)
-        if (a.stars >= 15) { notes += "${a.stars} csillag → fehéregyensúly csillagokra"; p = p.copy(whiteBalanceStars = true) }
-        if (a.greenExcess > 0.06f) { notes += "Zöld többlet a jelben → SCNR"; p = p.copy(scnr = 0.6f) }
+        if (a.greenExcess > 0.06f) { p = p.copy(scnr = 0.6f); notes += "Zöld többlet a jelben → SCNR" }
 
-        // zaj / kockaszám
-        val snrLow = a.dynRange < 15f
-        val denoise = when { frames in 1..15 -> 0.45f; snrLow -> 0.4f; frames in 16..40 -> 0.3f; else -> 0.2f }
-        if (denoise > 0f) notes += "Zajszűrés ${"%.0f".format(denoise * 100)}% (${if (frames > 0) "$frames kocka" else "jel/zaj alapján"})"
-        p = p.copy(denoise = denoise, denoiseRadius = if (denoise > 0.35f) 3 else 2)
-        // OSC színzaj: mindig szűrjük, a kockaszámtól függő erővel
-        val chroma = when { frames in 1..30 -> 0.8f; frames in 31..100 -> 0.65f; else -> 0.5f }
-        notes += "Színzaj-szűrés ${"%.0f".format(chroma * 100)}% (OSC színes szemcse ellen)"
-        p = p.copy(chromaDenoise = chroma, chromaRadius = 4)
-
-        // csillagok mérete
-        val bloat = a.fwhm > 4.5f
-        if (bloat) notes += "Nagy csillagok (FWHM ${"%.1f".format(a.fwhm)} px) → csillagcsökkentés"
-
-        // típus szerinti stretch és eszközök
-        p = when (a.type) {
-            ObjectType.GALAXY -> {
-                notes += "Galaxis: autostretch + HDR magkompresszió + enyhe clarity"
-                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.22f, mtfShadowClip = 2.8f, hdrCompress = if (a.dynRange > 80f) 0.4f else 0.25f, hdrRadius = 24,
-                    starReduction = if (bloat) 0.4f else 0.25f, clarity = 0.15f, saturation = 0.15f, vibrance = 0.2f, deconvIterations = if (a.fwhm in 2f..4f) 6 else 0, deconvSigma = (a.fwhm / 2.355f).coerceIn(0.7f, 1.6f))
-            }
-            ObjectType.EMISSION_NEBULA -> {
-                notes += "Emissziós köd: asinh stretch + csillagtalan réteg (köd kiemelés), csillagok 60%-ra"
-                p.copy(stretchMode = StretchMode.ASINH, asinhStrength = asinhFor(bgAfterBe, 0.16f), starless = true, starlessRadius = if (bloat) 6 else 4, starsBlend = 0.6f, nebulaBoost = 0.2f,
-                    saturation = 0.2f, vibrance = 0.3f)
-            }
-            ObjectType.REFLECTION_NEBULA -> {
-                notes += "Reflexiós köd: asinh stretch, finom csillagcsökkentés, kék telítettség megtartva"
-                p.copy(stretchMode = StretchMode.ASINH, asinhStrength = asinhFor(bgAfterBe, 0.17f), starReduction = if (bloat) 0.35f else 0.2f, starRadius = 3, vibrance = 0.35f, scnr = 0f)
-            }
-            ObjectType.PLANETARY_NEBULA -> {
-                notes += "Planetáris köd: MTF stretch, HDR a fényes magra, dekonvolúció"
-                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.18f, hdrCompress = 0.5f, hdrRadius = 10, deconvIterations = 10, deconvSigma = (a.fwhm / 2.355f).coerceIn(0.8f, 1.5f), sharpen = 0.2f, saturation = 0.25f)
-            }
-            ObjectType.GLOBULAR -> {
-                notes += "Gömbhalmaz: asinh (a mag ne égjen ki) + HDR + dekonvolúció"
-                p.copy(stretchMode = StretchMode.ASINH, asinhStrength = asinhFor(bgAfterBe, 0.14f), hdrCompress = 0.5f, hdrRadius = 12, deconvIterations = 8, deconvSigma = (a.fwhm / 2.355f).coerceIn(0.8f, 1.5f), sharpen = 0.25f, saturation = 0.3f, denoise = denoise * 0.6f)
-            }
-            ObjectType.OPEN_CLUSTER, ObjectType.STARFIELD -> {
-                notes += "Nyílthalmaz / csillagmező: visszafogott autostretch, csillagszínek kiemelése"
-                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.2f, mtfShadowClip = 3f, saturation = 0.35f, vibrance = 0.2f, sharpen = 0.15f, denoise = denoise * 0.7f, starReduction = if (bloat) 0.25f else 0f)
-            }
-            ObjectType.UNKNOWN -> {
-                notes += "Típus bizonytalan: biztonságos autostretch + enyhe eszközök"
-                p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.22f, saturation = 0.15f, starReduction = if (bloat) 0.3f else 0f)
-            }
-        }
-        if (a.extendedHue == "vörös+kék (dual-band)") notes += "Dual-band jellegű színek: a HOO paletta a Paletta fülön egy érintéssel kipróbálható"
-
-        // --- visszacsatolás: háttér 0.14–0.27 (Siril-szerű ~0.2), csúcs-vágás < 0.2 % ---
+        // 4. stretch: asinh (bp, D) + mtf megoldás
+        val D = when (cat) { Category.NEBULA -> D_NEBULA; Category.GALAXY -> D_GALAXY; Category.STARFIELD -> D_STARFIELD }
         val probe = src.downscale(500)
-        var lastCast = 0f
-        fun measure(pp: ProcessParams): Pair<Float, Float> {
+        val pre = Processor.process(probe, p.copy(stretchMode = StretchMode.NONE, denoise = 0f, chromaDenoise = 0f))
+        val chMed = FloatArray(pre.channels) { Processor.median(pre.data[it]) }
+        val medLin = chMed.min().coerceAtLeast(1e-5f)
+        // objektum-maszk a lineáris képen (nyitás + elmosás, háttér + 2.5σ felett) – a p90-et ezen mérjük
+        val preLum = pre.toMono().data[0]
+        val bgL = Processor.median(preLum); val nz = (Processor.mad(preLum, bgL) * 1.4826f).coerceAtLeast(1e-6f)
+        val opened = Processor.boxBlur(openArr(preLum, pre.width, pre.height, 2), pre.width, pre.height, 3)
+        val mask = BooleanArray(preLum.size) { opened[it] > bgL + 2.5f * nz }
+        val maskN = mask.count { it }
+        val useBody = extended && maskN > preLum.size / 400
+        val targetLabel = if (useBody) "objektum p90 ≈ 72/255" else "ég medián ≈ 10/255"
+
+        var bpK = 0.987f
+        p = p.copy(stretchMode = StretchMode.ASINH, asinhStrength = D, blackPoint = (bpK * medLin).coerceIn(0f, 0.2f))
+
+        data class M(val sky: Float, val body: Float, val nearBlack: Float, val clip: Float, val pegged: Float)
+        fun measure(pp: ProcessParams): M {
             val out = Processor.process(probe, pp)
             val lum = out.toMono().data[0]
-            val med = Processor.median(lum)
-            var clip = 0; for (v in lum) if (v >= 0.995f) clip++
-            if (out.channels == 3) {
-                val bgc = FloatArray(3) { Processor.percentile(out.data[it], 0.3f) }
-                val m = bgc.average().toFloat().coerceAtLeast(1e-4f)
-                lastCast = bgc.maxOf { abs(it - m) } / m
+            val sky = Processor.percentile(lum, 0.5f)
+            val bodyVals = if (useBody) { val l = ArrayList<Float>(maskN); for (i in lum.indices) if (mask[i]) l.add(lum[i]); l.sort(); l[(l.size * 0.9f).toInt().coerceAtMost(l.size - 1)] } else sky
+            var nb = 0; var cl = 0; var peg = 0
+            for (i in lum.indices) { if (lum[i] <= 0.5f / 255f) nb++; if (lum[i] >= 0.995f) cl++ }
+            if (out.channels == 3) for (i in lum.indices) { val r = out.data[0][i]; val g = out.data[1][i]; val b = out.data[2][i]; if ((r >= 0.995f || g >= 0.995f || b >= 0.995f) && min(r, min(g, b)) < 0.9f) peg++ }
+            return M(sky, bodyVals, nb.toFloat() / lum.size, cl.toFloat() / lum.size, peg.toFloat() / lum.size)
+        }
+        var iters = 0
+        fun solve(): M {
+            // m kisebb → világosabb; felezés: ha a metrika a cél alatt van, m-et csökkentjük
+            var lo = 0.02f; var hi = 0.25f; var best = p.copy(mtfMid = 0.1f); var bestM = measure(best); var bestErr = Float.MAX_VALUE
+            val target = if (useBody) BODY_P90_TARGET else SKY_MEDIAN_TARGET
+            for (i in 0 until 10) {
+                val m = (lo + hi) / 2f; val pp = p.copy(mtfMid = m); val mm = measure(pp); iters++
+                val v = if (useBody) mm.body else mm.sky
+                val err = abs(v - target)
+                if (err < bestErr) { bestErr = err; best = pp; bestM = mm }
+                if (err <= SOLVE_TOL) break
+                if (v < target) hi = m else lo = m
             }
-            return Pair(med, clip.toFloat() / lum.size)
+            p = best; return bestM
         }
-        var med = 0f; var clipFrac = 0f; var iters = 0
-        for (iter in 0 until 10) {
-            val m = measure(p); med = m.first; clipFrac = m.second; iters = iter
-            var changed = false
-            // arányos szabályozás: minél messzebb a cél (0.16), annál nagyobb lépés
-            if (med > 0.27f) { p = cooler(p, (0.20f / med).coerceIn(0.5f, 0.9f)); changed = true }
-            else if (med < 0.14f) { p = cooler(p, (0.20f / med.coerceAtLeast(0.02f)).coerceIn(1.1f, 2.2f)); changed = true }
-            if (clipFrac > 0.002f) { p = p.copy(highlights = (p.highlights - 0.25f).coerceAtLeast(-0.8f), hdrCompress = min(0.7f, p.hdrCompress + 0.15f)); changed = true }
-            if (!changed) break
+        var m = solve()
+        // kétpontos: túl világos ég → bp emelése (soha a medián fölé), újraoldás
+        var twoPoint = 0
+        while (m.sky > SKY_MEDIAN_CEIL && bpK < 1f && twoPoint < 2) {
+            bpK = min(1f, bpK + 0.0065f); p = p.copy(blackPoint = (bpK * medLin).coerceIn(0f, 0.2f)); m = solve(); twoPoint++
         }
-        // biztonsági háló: ha így sem jó, visszaesés egyszerű autostretch-re
-        if (med > 0.4f || med < 0.08f || clipFrac > 0.01f) {
-            p = p.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.22f, mtfShadowClip = 2.8f, nebulaBoost = 0f, hdrCompress = min(p.hdrCompress, 0.3f), exposure = 0f, highlights = 0f, deconvIterations = 0)
-            val m = measure(p); med = m.first; clipFrac = m.second
-            notes += "A típus-specifikus stretch túl erős/gyenge volt → biztonságos autostretch"
-        }
-        if (lastCast > 0.05f) { p = p.copy(scnr = max(p.scnr, 0.5f)); measure(p); notes += "Maradék színcast a háttérben → SCNR" }
-        notes += "Finomhangolás ($iters lépés): háttér ${"%.2f".format(med)}, kiégés ${"%.2f".format(clipFrac * 100)}%, háttér-színeltérés ${"%.0f".format(lastCast * 100)}%"
+        notes += "Stretch: asinh (bp = ${"%.3f".format(bpK)}·medián, D = ${"%.0f".format(D)}) + MTF m = ${"%.3f".format(p.mtfMid)} (${targetLabel}; $iters mérés${if (twoPoint > 0) ", kétpontos bp-emelés ×$twoPoint" else ""})"
+
+        // galaxis: GHS a korong/porsáv kiemelésére (photon-finish Showcase: SP 0.15)
+        if (cat == Category.GALAXY && a.dynRange > 20f) { p = p.copy(ghsEnabled = true, ghsD = 1.2f, ghsB = 6f, ghsSP = 0.15f, ghsLP = 0.05f, ghsHP = 0.7f); notes += "Galaxis: GHS (SP 0.15) a halvány korong és porsávok kiemelésére" }
+
+        // 5. telítettség
+        var sat = when (cat) { Category.NEBULA -> 0.60f; Category.STARFIELD -> 0.55f; Category.GALAXY -> 0.60f }
+        p = p.copy(saturation = sat)
+
+        // 6. csillagok: csak kiterjedt objektumnál csökkentés (screen-blend ~0.45); halmaznál soha
+        if (extended) {
+            p = p.copy(starless = true, starlessRadius = if (a.fwhm > 4.5f) 6 else 4, starsBlend = 0.55f)
+            notes += "Csillagok visszafogása 45 % (csillagtalan réteg + visszakeverés), a köd/galaxis kerül előtérbe"
+        } else notes += "Halmaz/csillagmező: a csillagok a téma – nincs csillagcsökkentés"
+        if (a.fwhm in 2f..4f && cat == Category.GALAXY) p = p.copy(deconvIterations = 5, deconvSigma = (a.fwhm / 2.355f).coerceIn(0.7f, 1.6f))
+
+        // 7. QA-kapuk
+        var q = measure(p)
+        val pegLimit = when (cat) { Category.NEBULA -> 0.20f; Category.STARFIELD -> 0.10f; Category.GALAXY -> 0.15f }
+        if (q.pegged > pegLimit * 0.05f) { sat *= 0.85f; p = p.copy(saturation = sat); q = measure(p); notes += "QA: beragadt színcsatorna → telítettség 0.85×"
+            if (q.pegged > pegLimit * 0.05f) { sat = sat / 0.85f * 0.70f; p = p.copy(saturation = sat); q = measure(p); notes += "QA: még mindig → telítettség 0.70×" } }
+        if (q.nearBlack > 0.02f) { p = p.copy(blackPoint = (p.blackPoint * 0.95f)); q = measure(p); notes += "QA: közel-fekete ${"%.1f".format(q.nearBlack * 100)}% > 2% → feketepont visszavéve" }
+        if (q.clip > 0.003f) { p = p.copy(highlights = -0.3f, hdrCompress = 0.25f, hdrRadius = 16); q = measure(p); notes += "QA: kiégett csúcsfények → highlights −0.3, HDR" }
+        notes += "Eredmény (előnézeten): ég ${"%.0f".format(q.sky * 255)}/255, ${if (useBody) "objektum p90 ${"%.0f".format(q.body * 255)}/255, " else ""}közel-fekete ${"%.1f".format(q.nearBlack * 100)}%, kiégés ${"%.2f".format(q.clip * 100)}%"
+        notes += "Forrás: photon-finish – github.com/ColinB-WB/photon-finish (MIT)"
         return Result(p, a, notes)
     }
 
@@ -281,12 +310,5 @@ object AutoEditor {
         if (med < 0.06f) { p = p.copy(shadows = 0.3f, exposure = 0.3f); notes += "Sötét kép → árnyékok emelése" }
         else if (med > 0.35f) { p = p.copy(blacks = -0.3f, contrast = 0.1f); notes += "Világos háttér → feketék mélyítése" }
         return Result(p, a, notes)
-    }
-
-    /** A stretch erősségének léptékezése (k<1 sötétít, k>1 világosít). */
-    private fun cooler(p: ProcessParams, k: Float): ProcessParams = when (p.stretchMode) {
-        StretchMode.ASINH -> p.copy(asinhStrength = (p.asinhStrength * k).coerceIn(5f, 1000f))
-        StretchMode.AUTO, StretchMode.MTF -> p.copy(mtfMidtones = (p.mtfMidtones * k).coerceIn(0.05f, 0.6f))
-        StretchMode.NONE -> p.copy(exposure = p.exposure + (if (k > 1f) 0.3f else -0.3f))
     }
 }

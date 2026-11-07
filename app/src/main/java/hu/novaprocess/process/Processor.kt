@@ -29,6 +29,8 @@ object Processor {
         if (p.palette != Palette.NATURAL) img = palette(img, p.palette, p.paletteStrength)
         // --- stretch ---
         img = stretch(img, p)
+        if (p.mtfMid > 0f) img = mtfAfter(img, p.mtfMid)
+        if (p.ghsEnabled) img = ghs(img, p.ghsD, p.ghsB, p.ghsSP, p.ghsLP, p.ghsHP)
         if (p.neutralizeAfterStretch) img = neutralizeBackground(img)
         if (p.hdrCompress > 0f) img = hdrCompress(img, p.hdrCompress, p.hdrRadius)
         // --- csillagok ---
@@ -549,6 +551,47 @@ object Processor {
             }
         }
         return out
+    }
+
+    /** Siril `mtf 0 m 1` a stretch után: m kisebb → világosabb. */
+    fun mtfAfter(src: FloatImage, m: Float): FloatImage {
+        val mm = m.coerceIn(0.001f, 0.999f)
+        val lut = FloatArray(4096) { mtf(mm, it / 4095f) }
+        for (c in 0 until src.channels) { val a = src.data[c]; for (i in a.indices) a[i] = lut[(a[i].coerceIn(0f, 1f) * 4095f).toInt()] }
+        return src
+    }
+
+    /**
+     * Generalized Hyperbolic Stretch (Siril `ght`, b > 0 eset). D = erősség, b = koncentráció az SP körül,
+     * SP = szimmetriapont, LP/HP = árnyék-/csúcsfény-védelem (alatta/fölötte lineáris folytatás).
+     */
+    fun ghs(src: FloatImage, D: Float, b: Float, SP: Float, LP: Float, HP: Float): FloatImage {
+        val d = D.toDouble(); val bb = b.coerceAtLeast(0.01f).toDouble(); val sp = SP.toDouble(); val lp = LP.coerceAtMost(SP).toDouble(); val hp = HP.coerceAtLeast(SP).toDouble()
+        val qlp = Math.pow(1 + d * bb * (sp - lp), -1 / bb)
+        val q0 = qlp - d * (sp - lp) * Math.pow(1 + d * bb * (sp - lp), -(1 + bb) / bb)
+        val qwp = 2 - Math.pow(1 + d * bb * (hp - sp), -1 / bb)
+        val q1 = qwp + d * (hp - sp) * Math.pow(1 + d * bb * (hp - sp), -(1 + bb) / bb)
+        val q = 1.0 / (q1 - q0)
+        val aLo = d * Math.pow(1 + d * bb * (sp - lp), -(1 + bb) / bb) * q
+        val aHi = d * Math.pow(1 + d * bb * (hp - sp), -(1 + bb) / bb) * q
+        fun t(x: Double): Double = when {
+            x < lp -> aLo * (x - lp) + q * (qlp - q0)
+            x < sp -> q * (Math.pow(1 + d * bb * (sp - x), -1 / bb) - q0)
+            x < hp -> q * (2 - Math.pow(1 + d * bb * (x - sp), -1 / bb) - q0)
+            else -> aHi * (x - hp) + q * (qwp - q0)
+        }
+        val lut = FloatArray(4096) { t(it / 4095.0).coerceIn(0.0, 1.0).toFloat() }
+        // luminancián, színmegőrzéssel
+        if (src.channels == 3) {
+            val r = src.data[0]; val g = src.data[1]; val bch = src.data[2]
+            for (i in 0 until src.size) {
+                val l = 0.299f * r[i] + 0.587f * g[i] + 0.114f * bch[i]
+                val nl = lut[(l.coerceIn(0f, 1f) * 4095f).toInt()]
+                val f = if (l > 1e-5f) nl / l else 1f
+                r[i] = (r[i] * f).coerceIn(0f, 1f); g[i] = (g[i] * f).coerceIn(0f, 1f); bch[i] = (bch[i] * f).coerceIn(0f, 1f)
+            }
+        } else { val a = src.data[0]; for (i in a.indices) a[i] = lut[(a[i].coerceIn(0f, 1f) * 4095f).toInt()] }
+        return src
     }
 
     /** Midtones Transfer Function (PixInsight/Siril). */

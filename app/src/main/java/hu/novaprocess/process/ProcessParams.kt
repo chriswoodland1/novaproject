@@ -25,6 +25,9 @@ data class ProcessParams(
     val blackPoint: Float = 0f,               // 0..0.2 (lineáris)
     val mtfMidtones: Float = 0.25f,           // AUTO/MTF cél háttér
     val mtfShadowClip: Float = 2.8f,          // MAD-szorzó
+    val mtfMid: Float = 0f,                   // asinh UTÁNI MTF középtónus (Siril `mtf 0 m 1`; 0 = ki; kisebb = világosabb)
+    val ghsEnabled: Boolean = false,          // Generalized Hyperbolic Stretch (galaxis-korong/porsáv kiemelés)
+    val ghsD: Float = 1.5f, val ghsB: Float = 5f, val ghsSP: Float = 0.15f, val ghsLP: Float = 0.06f, val ghsHP: Float = 0.65f,
     val starReduction: Float = 0f,            // 0..1
     val starRadius: Int = 2,                  // 1..5 px
     val denoise: Float = 0f,                  // 0..1
