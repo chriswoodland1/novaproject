@@ -114,7 +114,7 @@ private fun ObjectDetails(o: CatObject, f: SkyField) {
     Column(Modifier.fillMaxWidth().background(cs.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(12.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(o.title, style = MaterialTheme.typography.titleMedium)
         if (o.allNames.isNotBlank()) Text(o.allNames, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-        fun line(k: String, v: String) = Row { Text(k, Modifier.width(110.dp), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant); Text(v, style = MaterialTheme.typography.bodySmall) }
+        @Composable fun line(k: String, v: String) = Row { Text(k, Modifier.width(110.dp), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant); Text(v, style = MaterialTheme.typography.bodySmall) }
         line("Típus", o.typeLabel)
         line("Csillagkép", "${o.constellationHu} (${o.const})")
         o.distanceLy?.let { line("Távolság", Catalog.formatDistance(it)) }

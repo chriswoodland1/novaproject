@@ -39,7 +39,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
-enum class ExportFormat { JPEG, PNG, TIFF16, FRAMED_JPEG, FITS32 }
+enum class ExportFormat { JPEG, PNG, TIFF16, FRAMED_JPEG, FITS32, CARD_JPEG, CARD_PNG }
 enum class ExportSize(val label: String, val w: Int, val h: Int) {
     ORIGINAL("Eredeti", 0, 0), IG_SQUARE("Instagram négyzet 1080", 1080, 1080), IG_PORTRAIT("Instagram portré 1080×1350", 1080, 1350),
     ASTROBIN("Astrobin 1920", 1920, 0), UHD("4K 3840", 3840, 0)
@@ -437,7 +437,12 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------------------------------------------------------- kötegelt vízjel + adatfelirat
     data class BatchItem(val uri: Uri, val name: String, val data: hu.novaprocess.process.InfoData, val width: Int = 0, val height: Int = 0)
-    data class BatchState(val items: List<BatchItem> = emptyList(), val running: Boolean = false, val done: Int = 0, val message: String? = null, val png: Boolean = false)
+    data class BatchState(val items: List<BatchItem> = emptyList(), val running: Boolean = false, val done: Int = 0, val message: String? = null, val png: Boolean = false, val card: Boolean = false)
+    private fun batchDecorate(b: Bitmap, item: BatchItem): Bitmap {
+        val data = item.data.copy(city = item.data.city.ifBlank { infoOverlay.value.city })
+        return if (batch.value.card) hu.novaprocess.process.ShareCard.render(getApplication(), b, card.value, hu.novaprocess.process.CardData(data, contextLine(hu.novaprocess.catalog.Catalog.find(getApplication(), data.objectName.substringBefore(" · ")))), watermark.value)
+        else Watermark.apply(getApplication(), hu.novaprocess.process.InfoOverlay.apply(b, infoOverlay.value, data), watermark.value)
+    }
     val batch = MutableStateFlow(BatchState())
 
     /** Seestar fájlnév-minták: "Stacked_142_M 31_10.0s_IRCUT_20251104-223344.jpg", "M 31_…", "Light_M 31_10.0s_…". */
@@ -497,8 +502,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     /** Előnézet a galériához (lekicsinyítve, vízjel + felirat). */
     fun batchPreview(item: BatchItem): Bitmap? {
         val b = decodeForBatch(item.uri, 1400) ?: return null
-        val withInfo = hu.novaprocess.process.InfoOverlay.apply(b, infoOverlay.value, item.data.copy(city = item.data.city.ifBlank { infoOverlay.value.city }))
-        return Watermark.apply(getApplication(), withInfo, watermark.value)
+        return batchDecorate(b, item)
     }
 
     /** Teljes felbontású export minden képre a kiválasztott mappába. */
@@ -514,7 +518,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 for ((i, item) in batch.value.items.withIndex()) {
                     withContext(Dispatchers.Default) {
                         val b = decodeForBatch(item.uri, 8000) ?: return@withContext
-                        val out = Watermark.apply(ctx, hu.novaprocess.process.InfoOverlay.apply(b, infoOverlay.value, item.data.copy(city = item.data.city.ifBlank { infoOverlay.value.city })), watermark.value)
+                        val out = batchDecorate(b, item)
                         val png = batch.value.png
                         val base = item.name.substringBeforeLast('.') + (if (png) "_nova.png" else "_nova.jpg")
                         tree?.createFile(if (png) "image/png" else "image/jpeg", base)?.uri?.let { u -> ctx.contentResolver.openOutputStream(u)!!.use { out.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, if (png) 100 else 97, it) }; ok++ }
@@ -546,7 +550,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         sky.value = SkyState(f, matches, crop, sky.value.show)
         if (primary != null) {
             val t = caption.value.title
-            val generic = t.isBlank() || t.startsWith("Stack") || t.startsWith("Light") || Regex("^(M|NGC|IC|C)\s?\d+$", RegexOption.IGNORE_CASE).matches(t.trim()) || t.contains("_")
+            val generic = t.isBlank() || t.startsWith("Stack") || t.startsWith("Light") || Regex("^(M|NGC|IC|C)\\s?\\d+$", RegexOption.IGNORE_CASE).matches(t.trim()) || t.contains("_")
             if (generic) caption.value = caption.value.copy(title = primary.obj.title)
         }
     }
@@ -796,6 +800,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                             ExportFormat.PNG -> Watermark.apply(getApplication(), deco(out.toBitmap()), watermark.value).compress(Bitmap.CompressFormat.PNG, 100, os)
                             ExportFormat.JPEG -> Watermark.apply(getApplication(), deco(out.toBitmap()), watermark.value).compress(Bitmap.CompressFormat.JPEG, quality, os)
                             ExportFormat.FRAMED_JPEG -> framed(Watermark.apply(getApplication(), deco(out.toBitmap()), watermark.value)).compress(Bitmap.CompressFormat.JPEG, quality, os)
+                            ExportFormat.CARD_JPEG -> cardOf(sized(if (exportAnnotations.value) annotate(out.toBitmap()) else out.toBitmap())).compress(Bitmap.CompressFormat.JPEG, quality, os)
+                            ExportFormat.CARD_PNG -> cardOf(sized(if (exportAnnotations.value) annotate(out.toBitmap()) else out.toBitmap())).compress(Bitmap.CompressFormat.PNG, 100, os)
                         }
                     }
                 }
@@ -809,6 +815,15 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun deco(b: Bitmap): Bitmap = withInfo(sized(if (exportAnnotations.value) annotate(b) else b))
+
+    // ---------------------------------------------------------------- megosztás-kártya
+    val card = MutableStateFlow(hu.novaprocess.process.ShareCard.load(app))
+    fun setCard(s: hu.novaprocess.process.CardSettings) { card.value = s; hu.novaprocess.process.ShareCard.save(getApplication(), s) }
+    /** Katalógus-kontextus sor: típus · csillagkép · távolság. */
+    fun contextLine(o: hu.novaprocess.catalog.CatObject?): String? = o?.let { listOfNotNull(it.typeLabel.replaceFirstChar { c -> c.uppercase() }, it.constellationHu + " csillagkép", it.distanceLy?.let { d -> hu.novaprocess.catalog.Catalog.formatDistance(d) }).joinToString(" · ") }
+    /** Kártya az aktuális képre: a vízjel csak logóként kerül a kártyára (a képre nem), a felirat a kártya sávjába. */
+    private fun cardOf(b: Bitmap): Bitmap = hu.novaprocess.process.ShareCard.render(getApplication(), b, card.value, hu.novaprocess.process.CardData(infoData(), contextLine(primaryObject)), watermark.value)
+    fun cardPreview(): Bitmap? = _ui.value.preview?.let { cardOf(it) }
 
     /** Fekete keret + felirat: objektum · dátum · kockák × expozíció = integráció · eszköz · NovaProcess. */
     private fun framed(src: Bitmap): Bitmap {

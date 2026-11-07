@@ -64,6 +64,8 @@ fun BatchBrandScreen(vm: EditorViewModel, onBack: () -> Unit) {
     val info by vm.infoOverlay.collectAsState()
     val wm by vm.watermark.collectAsState()
     var showWm by remember { mutableStateOf(false) }
+    var showCard by remember { mutableStateOf(false) }
+    val cardS by vm.card.collectAsState()
     val prefs = ctx.getSharedPreferences("nova_ui", 0)
     var outTree by remember { mutableStateOf(prefs.getString("batch_out", null)?.let { Uri.parse(it) }) }
 
@@ -98,8 +100,8 @@ fun BatchBrandScreen(vm: EditorViewModel, onBack: () -> Unit) {
         val pager = rememberPagerState(pageCount = { st.items.size })
         HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth().weight(1f)) { page ->
             val item = st.items[page]
-            var preview by remember(item.uri, info, wm, item.data) { mutableStateOf<Bitmap?>(null) }
-            LaunchedEffect(item.uri, info, wm, item.data) {
+            var preview by remember(item.uri, info, wm, item.data, st.card, cardS) { mutableStateOf<Bitmap?>(null) }
+            LaunchedEffect(item.uri, info, wm, item.data, st.card, cardS) {
                 preview = withContext(Dispatchers.Default) { vm.batchPreview(item) }
             }
             Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
@@ -125,6 +127,8 @@ fun BatchBrandScreen(vm: EditorViewModel, onBack: () -> Unit) {
                 Pill("Felirat: ${if (info.enabled) "be" else "ki"}", info.enabled) { vm.setInfoOverlay(info.copy(enabled = !info.enabled)) }
                 listOf("Bal lent" to hu.novaprocess.process.WmPosition.BOTTOM_LEFT, "Jobb lent" to hu.novaprocess.process.WmPosition.BOTTOM_RIGHT, "Bal fent" to hu.novaprocess.process.WmPosition.TOP_LEFT, "Jobb fent" to hu.novaprocess.process.WmPosition.TOP_RIGHT).forEach { (l, pos) -> Pill(l, info.position == pos) { vm.setInfoOverlay(info.copy(position = pos)) } }
                 Pill(if (st.png) "PNG (veszteségmentes)" else "JPEG 97%", st.png) { vm.batch.value = st.copy(png = !st.png) }
+                Pill(if (st.card) "Kártya: ${cardS.layout.label}" else "Kártya: ki", st.card) { vm.batch.value = st.copy(card = !st.card) }
+                if (st.card) TextButton(onClick = { showCard = true }) { Text("Kártya beállítás") }
                 TextButton(onClick = { vm.batchRemove(item.uri) }) { Text("Kép eltávolítása", color = cs.error) }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -135,9 +139,10 @@ fun BatchBrandScreen(vm: EditorViewModel, onBack: () -> Unit) {
             if (st.running) { LinearProgressIndicator(progress = { if (st.items.isNotEmpty()) st.done.toFloat() / st.items.size else 0f }, modifier = Modifier.fillMaxWidth()); Text("Export ${st.done} / ${st.items.size}", style = MaterialTheme.typography.bodySmall) }
             st.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (it.startsWith("Hiba")) cs.error else cs.onSurfaceVariant) }
             Button(onClick = { outTree?.let { vm.batchExport(it) } }, enabled = !st.running && outTree != null && st.items.isNotEmpty(), shape = CircleShape, modifier = Modifier.fillMaxWidth().height(50.dp).padding(bottom = 4.dp)) {
-                Text(if (st.running) "Export…" else "Összes exportálása (${st.items.size}) vízjellel + felirattal")
+                Text(if (st.running) "Export…" else if (st.card) "Összes exportálása (${st.items.size}) kártyaként" else "Összes exportálása (${st.items.size}) vízjellel + felirattal")
             }
         }
     }
     if (showWm) WatermarkSheet(vm) { showWm = false }
+    if (showCard) CardSheet(vm) { showCard = false }
 }

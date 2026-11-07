@@ -85,6 +85,7 @@ dependencies {
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.code.gson:gson:2.11.0")
+    implementation("com.google.zxing:core:3.5.3")
     // Seestar SMB megosztás böngészése (EMMC Images)
     implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
 }

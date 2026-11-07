@@ -527,8 +527,9 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: ()
     val wm by vm.watermark.collectAsState()
     val cs = MaterialTheme.colorScheme
     var format by remember { mutableStateOf(ExportFormat.JPEG) }
-    val mime = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG -> "image/jpeg"; ExportFormat.PNG -> "image/png"; ExportFormat.TIFF16 -> "image/tiff"; ExportFormat.FITS32 -> "application/fits" }
-    val ext = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG -> "jpg"; ExportFormat.PNG -> "png"; ExportFormat.TIFF16 -> "tif"; ExportFormat.FITS32 -> "fits" }
+    val mime = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG, ExportFormat.CARD_JPEG -> "image/jpeg"; ExportFormat.PNG, ExportFormat.CARD_PNG -> "image/png"; ExportFormat.TIFF16 -> "image/tiff"; ExportFormat.FITS32 -> "application/fits" }
+    val ext = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG, ExportFormat.CARD_JPEG -> "jpg"; ExportFormat.PNG, ExportFormat.CARD_PNG -> "png"; ExportFormat.TIFF16 -> "tif"; ExportFormat.FITS32 -> "fits" }
+    var showCard by remember { mutableStateOf(false) }
     val cap by vm.caption.collectAsState()
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(mime)) { uri -> if (uri != null) { vm.export(uri, format); onClose() } }
     ModalBottomSheet(onDismissRequest = onClose, containerColor = cs.surface, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -546,6 +547,8 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: ()
                 Pill("PNG", format == ExportFormat.PNG) { format = ExportFormat.PNG }
                 Pill("TIFF 16 bit", format == ExportFormat.TIFF16) { format = ExportFormat.TIFF16 }
                 Pill("Keretes JPEG", format == ExportFormat.FRAMED_JPEG) { format = ExportFormat.FRAMED_JPEG }
+                Pill("Kártya JPEG", format == ExportFormat.CARD_JPEG) { format = ExportFormat.CARD_JPEG }
+                Pill("Kártya PNG", format == ExportFormat.CARD_PNG) { format = ExportFormat.CARD_PNG }
                 Pill("FITS 32 bit", format == ExportFormat.FITS32) { format = ExportFormat.FITS32 }
             }
             val sizeP by vm.exportSize.collectAsState()
@@ -568,7 +571,22 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: ()
             }
             val info by vm.infoOverlay.collectAsState()
             val capI by vm.caption.collectAsState()
-            if (format != ExportFormat.TIFF16 && format != ExportFormat.FITS32) {
+            val isCard = format == ExportFormat.CARD_JPEG || format == ExportFormat.CARD_PNG
+            if (isCard) {
+                val cardS by vm.card.collectAsState()
+                val prev = remember(cardS, capI, info.city) { vm.cardPreview() }
+                prev?.let { Image(it.asImageBitmap(), contentDescription = "Kártya előnézet", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black)) }
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    hu.novaprocess.process.CardLayout.values().forEach { l -> Pill(l.label, cardS.layout == l) { vm.setCard(cardS.copy(layout = l)) } }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.OutlinedTextField(value = capI.title, onValueChange = { vm.caption.value = capI.copy(title = it) }, label = { Text("Objektum") }, singleLine = true, modifier = Modifier.weight(1f))
+                    androidx.compose.material3.OutlinedTextField(value = info.city, onValueChange = { vm.setInfoOverlay(info.copy(city = it)) }, label = { Text("Város / hely") }, singleLine = true, modifier = Modifier.weight(1f))
+                }
+                TextButton(onClick = { showCard = true }) { Text("Kártya beállításai (sablonok, logó, QR, szín)…") }
+                Text("A kártyán a vízjel logóként, a felirat a sávban jelenik meg – a képre magára nem kerül rá semmi.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+            }
+            if (format != ExportFormat.TIFF16 && format != ExportFormat.FITS32 && !isCard) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Adatfelirat a képen", style = MaterialTheme.typography.titleMedium)
@@ -620,4 +638,5 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: ()
         }
       }
     }
+    if (showCard) CardSheet(vm) { showCard = false }
 }
