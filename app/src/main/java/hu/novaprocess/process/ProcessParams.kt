@@ -32,6 +32,7 @@ data class ProcessParams(
     val starRadius: Int = 2,                  // 1..5 px
     val denoise: Float = 0f,                  // 0..1
     val denoiseRadius: Int = 2,
+    val linearDenoise: Float = 0f,            // zajszűrés a LINEÁRIS képen, stretch előtt (adaptív Wiener / Lee) 0..1
     val chromaDenoise: Float = 0f,            // színzaj-szűrés 0..1 (csak a színinformációt simítja)
     val chromaRadius: Int = 4,
 

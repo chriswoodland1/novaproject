@@ -161,7 +161,8 @@ private val CATEGORIES: List<Pair<String, List<Tool>>> = listOf(
     "Részlet" to listOf(
         Tool("cdn", "Színzaj-szűrés", 0f, 1f, get = { it.chromaDenoise }, set = { p, v -> p.copy(chromaDenoise = v) }),
         Tool("cdr", "Színzaj sugár", 2f, 10f, { "%.0f".format(it) }, get = { it.chromaRadius.toFloat() }, set = { p, v -> p.copy(chromaRadius = v.toInt()) }),
-        Tool("dn", "Zajszűrés", 0f, 1f, get = { it.denoise }, set = { p, v -> p.copy(denoise = v) }),
+        Tool("lindn", "Zajszűrés stretch előtt (lineáris)", 0f, 1f, get = { it.linearDenoise }, set = { p, v -> p.copy(linearDenoise = v) }),
+        Tool("dn", "Zajszűrés (stretch után)", 0f, 1f, get = { it.denoise }, set = { p, v -> p.copy(denoise = v) }),
         Tool("dnr", "Zajszűrés sugár", 1f, 4f, { "%.0f".format(it) }, get = { it.denoiseRadius.toFloat() }, set = { p, v -> p.copy(denoiseRadius = v.toInt()) }),
         Tool("clar", "Clarity", -1f, 1f, get = { it.clarity }, set = { p, v -> p.copy(clarity = v) }),
         Tool("dehaze", "Dehaze", 0f, 1f, get = { it.dehaze }, set = { p, v -> p.copy(dehaze = v) }),
@@ -208,6 +209,9 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     var showStarMap by remember { mutableStateOf(false) }
     val sky by vm.sky.collectAsState()
     val cropReq by vm.cropRequest.collectAsState()
+    val videoSt by vm.buildUp.collectAsState()
+    val saveVideo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri -> if (uri != null) vm.makeBuildUpVideo(uri) }
+    LaunchedEffect(videoSt.message) { videoSt.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show() } }
     LaunchedEffect(cropReq) { cropReq?.let { req ->
         // a Vágás eszközre váltunk, hogy az Alkalmaz / Mégse gombok látszódjanak
         CATEGORIES.forEachIndexed { ci, (_, ts) -> val ti = ts.indexOfFirst { it.id == "cropui" }; if (ti >= 0) { cat = ci; toolIdx = ti } }
@@ -290,6 +294,9 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                     IconButton(onClick = { showMenu = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.MoreVert, contentDescription = "Továbbiak", tint = cs.onSurface) }
                     androidx.compose.material3.DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Megosztás-kártya…") }, onClick = { showMenu = false; exportAsCard = true; showExport = true })
+                        if (vm.frames.value.count { !it.rejected } >= 2) androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(if (videoSt.running) "Videó készül… ${videoSt.phase} ${videoSt.current}/${videoSt.total}" else "▶ „Így épült fel” videó (MP4)") },
+                            onClick = { showMenu = false; if (!videoSt.running) saveVideo.launch("igy_epult_fel_${System.currentTimeMillis()}.mp4") })
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Presetek és receptek") }, onClick = { showMenu = false; showPresets = true })
                         androidx.compose.material3.DropdownMenuItem(text = { Text(if (solve.running) "Plate solve fut…" else "Plate solve (astrometry.net)") }, onClick = { showMenu = false; vm.runSolve() })
                         if (solve.result != null) androidx.compose.material3.DropdownMenuItem(text = { Text(if (solve.show) "Annotációk elrejtése" else "Annotációk mutatása") }, onClick = { showMenu = false; vm.toggleAnnotations() })

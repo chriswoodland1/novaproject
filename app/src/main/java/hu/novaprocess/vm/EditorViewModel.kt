@@ -193,6 +193,28 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
 
     fun cancelStack() { stackJob?.cancel(); stackState.update { it.copy(running = false, error = "Megszakítva") } }
 
+    // ---------------------------------------------------------------- „Így épült fel” videó
+    data class VideoState(val running: Boolean = false, val phase: String = "", val current: Int = 0, val total: Int = 0, val message: String? = null)
+    val buildUp = MutableStateFlow(VideoState())
+    fun makeBuildUpVideo(out: Uri) {
+        val fs = cometFrames()   // nem kizárt kockák időrendben
+        if (fs.size < 2 || buildUp.value.running) return
+        viewModelScope.launch {
+            buildUp.value = VideoState(running = true, phase = "Indítás")
+            ProcessingBus.begin(getApplication(), "Így épült fel – videó")
+            try {
+                val exp = fs.firstOrNull { it.exposure != null }?.exposure ?: caption.value.exposure
+                val n = hu.novaprocess.stack.BuildUpVideo.make(getApplication(), fs.map { it.uri }, exp, params.value, caption.value.title, out) { p ->
+                    buildUp.value = VideoState(true, p.phase, p.current, p.total)
+                    ProcessingBus.progress("Videó · ${p.phase}", "${p.current} / ${p.total}", if (p.total > 0) p.current * 100 / p.total else 0)
+                }
+                buildUp.value = VideoState(message = "Kész: $n állomás, ${fs.size} kockából (MP4).")
+                ProcessingBus.done("Videó kész ✓", "$n állomás · ${fs.size} kocka")
+            } catch (e: kotlinx.coroutines.CancellationException) { buildUp.value = VideoState(message = "Megszakítva") }
+            catch (e: Throwable) { System.gc(); buildUp.value = VideoState(message = "Hiba: ${e.message ?: e.javaClass.simpleName}"); ProcessingBus.failed("Videó hiba", e.message ?: "") }
+        }
+    }
+
     // ---------------------------------------------------------------- üstökös mód
     data class CometState(val running: Boolean = false, val result: hu.novaprocess.stack.CometStacker.Result? = null, val error: String? = null)
     val comet = MutableStateFlow(CometState())
@@ -401,7 +423,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                         ProcessingBus.progress("Pipeline ${jobIdx + 1}/$totalJobs · ${job.name}", "${p.phase} ${p.current}/${p.total}", if (p.total > 0) p.current * 100 / p.total else 0)
                     }
                     pipeline.update { it.copy(detail = "Automata szerkesztés…") }
-                    val auto = withContext(Dispatchers.Default) { AutoEditor.run(previewSource!!, caption.value.title.ifBlank { null }, res.used, false, primaryObject?.let { hu.novaprocess.catalog.Catalog.autoType(it.type) }, source?.let { Processor.noiseSigma(it) }) }
+                    val auto = withContext(Dispatchers.Default) { AutoEditor.run(previewSource!!, caption.value.title.ifBlank { null }, res.used, false, primaryObject?.let { hu.novaprocess.catalog.Catalog.autoType(it.type) }, source?.let { Processor.centerCrop(it, 1024) }) }
                     params.value = auto.params
                     persistRecipe()
                     pipeline.update { it.copy(detail = "Export…") }
@@ -626,7 +648,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 val hint = solve.value.result?.annotations?.filter { it.type != "star" }?.maxByOrNull { it.radius }?.names?.firstOrNull() ?: caption.value.title.ifBlank { null }
                 val known = primaryObject?.let { hu.novaprocess.catalog.Catalog.autoType(it.type) }
                 val full = source
-                val res = withContext(Dispatchers.Default) { AutoEditor.run(src, hint, lastFrameCount, displayReferred, known, full?.let { Processor.noiseSigma(it) }) }
+                val res = withContext(Dispatchers.Default) { AutoEditor.run(src, hint, lastFrameCount, displayReferred, known, full?.let { Processor.centerCrop(it, 1024) }) }
                 auto.value = AutoState(result = res)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Throwable) { auto.value = AutoState(error = e.message ?: e.javaClass.simpleName) }

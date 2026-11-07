@@ -65,6 +65,8 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
     var showSeestar by remember { mutableStateOf(false) }
     var showPlanetary by remember { mutableStateOf(false) }
     var showComet by remember { mutableStateOf(false) }
+    val video by vm.buildUp.collectAsState()
+    val saveVideo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri -> if (uri != null) vm.makeBuildUpVideo(uri) }
     var showPipeline by remember { mutableStateOf(false) }
     var showFolder by remember { mutableStateOf(false) }
 
@@ -169,6 +171,11 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                 }
             } else {
                 st.error?.let { Text(it, color = cs.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 6.dp)) }
+                if (video.running) {
+                    LinearProgressIndicator(progress = { if (video.total > 0) video.current.toFloat() / video.total else 0f }, modifier = Modifier.fillMaxWidth())
+                    Text("„Így épült fel” videó · ${video.phase} ${video.current}/${video.total} (a jelenlegi szerkesztési beállításokkal)", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(bottom = 6.dp))
+                }
+                video.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (it.startsWith("Hiba")) cs.error else cs.onSurfaceVariant, modifier = Modifier.padding(bottom = 6.dp)) }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column {
                         Text("Becsült idő", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
@@ -177,6 +184,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                     }
                     if (st.log.isNotEmpty()) TextButton(onClick = { vm.runAutoEdit(); onOpenEditor() }) { Text("✦ Automata szerkesztés") }
                     if (good >= 3 && !st.running) TextButton(onClick = { showComet = true }) { Text("☄ Üstökös") }
+                    if (good >= 2 && !st.running && !video.running) TextButton(onClick = { saveVideo.launch("igy_epult_fel_${System.currentTimeMillis()}.mp4") }) { Text("▶ Videó") }
                     Button(onClick = { vm.startStack() }, enabled = good > 0, shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(containerColor = cs.primary, contentColor = cs.onPrimary),
                         modifier = Modifier.height(52.dp)) { Text("Stack", style = MaterialTheme.typography.titleMedium) }

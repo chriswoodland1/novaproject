@@ -190,7 +190,7 @@ object AutoEditor {
      *                  ahol a zaj többszörösen kisebb – a feketepontot viszont a teljes képhez kell igazítani, különben
      *                  a teljes felbontású égnek akár a fele a feketepont alá esik (foltos, fekete ég).
      */
-    fun run(src: FloatImage, nameHint: String?, frames: Int = 0, displayReferred: Boolean = false, knownType: ObjectType? = null, fullNoise: Float? = null): Result {
+    fun run(src: FloatImage, nameHint: String?, frames: Int = 0, displayReferred: Boolean = false, knownType: ObjectType? = null, fullCrop: FloatImage? = null): Result {
         val a = analyze(src, nameHint, knownType)
         if (displayReferred) return runDisplayReferred(src, a)
         val notes = ArrayList<String>()
@@ -210,9 +210,11 @@ object AutoEditor {
         if (noisy) dn += 0.1f
         // a photon-finish értékei a GraXpert MI-zajszűrőjére vonatkoznak; a saját (stretch utáni) szűrőnk ennél jóval erősebben mos,
         // ezért ~0.6× arányban képezzük le, hogy ne legyen „műanyag” a kép
-        val dnOwn = (dn * 0.6f).coerceIn(0.25f, 0.5f)
-        p = p.copy(denoise = dnOwn, denoiseRadius = 2, chromaDenoise = if (noisy) 0.8f else 0.6f, chromaRadius = 4)
-        notes += "Zajszűrés: photon-finish ${"%.2f".format(dn)}${if (noisy) " (+0.1 zajos/rövid)" else ""} → saját szűrő ${"%.0f".format(dnOwn * 100)} % + színzaj-szűrés"
+        // a photon-finish sorrendje: zajszűrés a LINEÁRIS képen (GraXpert), a stretch előtt → saját adaptív Wiener-szűrő;
+        // a stretch utáni szűrő már csak finom utómunka
+        val lin = (dn + 0.15f).coerceIn(0.6f, 0.9f)
+        p = p.copy(linearDenoise = lin, denoise = 0.15f, denoiseRadius = 2, chromaDenoise = if (noisy) 0.6f else 0.45f, chromaRadius = 4)
+        notes += "Zajszűrés: photon-finish ${"%.2f".format(dn)}${if (noisy) " (+0.1 zajos/rövid)" else ""} → lineáris (stretch előtti) szűrő ${"%.0f".format(lin * 100)} % + enyhe utószűrés + színzaj-szűrés"
 
         // 3. szín
         when {
@@ -240,7 +242,10 @@ object AutoEditor {
 
         // feketepont: photon-finish 0.987·medián, DE legalább 2.8σ-val a medián alatt (teljes felbontású zaj) – így az ég
         // legfeljebb ~0.3 %-a vágódik feketére. (A photon-finish ezt GraXpert MI-zajszűrés után mérné, ott a zaj elhanyagolható.)
-        val sigmaFull = (fullNoise ?: a.noise * 3f).coerceAtLeast(1e-6f)
+        // zaj teljes felbontáson, a lineáris zajszűrés UTÁN (ezt látja a stretch)
+        val sigmaRaw = fullCrop?.let { Processor.noiseSigma(it) }
+        val sigmaFull = (fullCrop?.let { c -> Processor.noiseSigma(Processor.linearDenoise(c.copy(), p.linearDenoise)) } ?: (a.noise * 3f * 0.4f)).coerceAtLeast(1e-6f)
+        if (sigmaRaw != null) notes += "Ég zaja teljes felbontáson: ${"%.5f".format(sigmaRaw)} → lineáris szűrés után ${"%.5f".format(sigmaFull)} (${"%.0f".format(sigmaFull / sigmaRaw * 100)} %)"
         var kSig = 2.8f
         fun bpFor(k: Float) = min(0.987f * medLin, medLin - k * sigmaFull).coerceIn(0f, 0.2f)
         p = p.copy(stretchMode = StretchMode.ASINH, asinhStrength = D, blackPoint = bpFor(kSig))
