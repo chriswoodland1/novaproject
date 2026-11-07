@@ -250,11 +250,14 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                     modifier = Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y)
                         .let { m -> if (night) m.graphicsLayer(alpha = 0.85f) else m })
             }
-            // azonosított objektum + vágási javaslat (katalógus)
+            // azonosított objektum + vágási javaslat (katalógus) – a státuszsáv alatt, külön érinthető chipek
             sky.matches.firstOrNull { it.inField }?.let { m -> if (scale == 1f && !cropMode) {
-                Row(Modifier.align(Alignment.TopStart).padding(8.dp).background(Color.Black.copy(alpha = 0.55f), androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).clickable { vm.toggleSky() }.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("◎ ${m.obj.title}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF8FE3A8))
-                    if (sky.crop != null && p.cropLeft == 0f && p.cropRight == 1f) Text("Vágás ›", style = MaterialTheme.typography.labelSmall, color = Color(0xFFFFD54F), modifier = Modifier.clickable { vm.applySuggestedCrop() })
+                Row(Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 8.dp, top = 56.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("◎ ${m.obj.title}", style = MaterialTheme.typography.labelMedium, color = Color(0xFF8FE3A8),
+                        modifier = Modifier.background(Color.Black.copy(alpha = 0.6f), androidx.compose.foundation.shape.RoundedCornerShape(18.dp)).clickable { vm.toggleSky() }.padding(horizontal = 12.dp, vertical = 9.dp))
+                    if (sky.crop != null && p.cropLeft == 0f && p.cropRight == 1f)
+                        Text("Vágás az objektumra ›", style = MaterialTheme.typography.labelMedium, color = Color.Black,
+                            modifier = Modifier.background(Color(0xFFFFD54F), androidx.compose.foundation.shape.RoundedCornerShape(18.dp)).clickable { vm.applySuggestedCrop() }.padding(horizontal = 12.dp, vertical = 9.dp))
                 }
             } }
             // A/B: a másik kép balról a csúszkáig, a kép fölé rajzolva
