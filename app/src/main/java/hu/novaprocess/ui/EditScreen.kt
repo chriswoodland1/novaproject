@@ -193,6 +193,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     var toolIdx by remember { mutableIntStateOf(0) }
     var showOriginal by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
+    var exportAsCard by remember { mutableStateOf(false) }
     var showPresets by remember { mutableStateOf(false) }
     var showWatermark by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
@@ -206,6 +207,12 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     var showHist by remember { mutableStateOf(true) }
     var showStarMap by remember { mutableStateOf(false) }
     val sky by vm.sky.collectAsState()
+    val cropReq by vm.cropRequest.collectAsState()
+    LaunchedEffect(cropReq) { cropReq?.let { req ->
+        // a Vágás eszközre váltunk, hogy az Alkalmaz / Mégse gombok látszódjanak
+        CATEGORIES.forEachIndexed { ci, (_, ts) -> val ti = ts.indexOfFirst { it.id == "cropui" }; if (ti >= 0) { cat = ci; toolIdx = ti } }
+        crop = req; cropMode = true; vm.cropRequest.value = null
+    } }
     val pickCompare = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.loadCompare(uri) }
 
     LaunchedEffect(ui.message) { ui.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show(); vm.clearMessage() } }
@@ -256,7 +263,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                     Text("◎ ${m.obj.title}", style = MaterialTheme.typography.labelMedium, color = Color(0xFF8FE3A8),
                         modifier = Modifier.background(Color.Black.copy(alpha = 0.6f), androidx.compose.foundation.shape.RoundedCornerShape(18.dp)).clickable { vm.toggleSky() }.padding(horizontal = 12.dp, vertical = 9.dp))
                     if (sky.crop != null && p.cropLeft == 0f && p.cropRight == 1f)
-                        Text("Vágás az objektumra ›", style = MaterialTheme.typography.labelMedium, color = Color.Black,
+                        Text("Vágási javaslat ›", style = MaterialTheme.typography.labelMedium, color = Color.Black,
                             modifier = Modifier.background(Color(0xFFFFD54F), androidx.compose.foundation.shape.RoundedCornerShape(18.dp)).clickable { vm.applySuggestedCrop() }.padding(horizontal = 12.dp, vertical = 9.dp))
                 }
             } }
@@ -282,6 +289,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                 Box {
                     IconButton(onClick = { showMenu = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.MoreVert, contentDescription = "Továbbiak", tint = cs.onSurface) }
                     androidx.compose.material3.DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        androidx.compose.material3.DropdownMenuItem(text = { Text("Megosztás-kártya…") }, onClick = { showMenu = false; exportAsCard = true; showExport = true })
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Presetek és receptek") }, onClick = { showMenu = false; showPresets = true })
                         androidx.compose.material3.DropdownMenuItem(text = { Text(if (solve.running) "Plate solve fut…" else "Plate solve (astrometry.net)") }, onClick = { showMenu = false; vm.runSolve() })
                         if (solve.result != null) androidx.compose.material3.DropdownMenuItem(text = { Text(if (solve.show) "Annotációk elrejtése" else "Annotációk mutatása") }, onClick = { showMenu = false; vm.toggleAnnotations() })
@@ -300,7 +308,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                     }
                 }
                 Spacer(Modifier.size(6.dp))
-                IconButton(onClick = { showExport = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.Download, contentDescription = "Export", tint = cs.onSurface) }
+                IconButton(onClick = { exportAsCard = false; showExport = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.Download, contentDescription = "Export", tint = cs.onSurface) }
             }
             // vágókeret
             if (cropMode) ui.preview?.let { b ->
@@ -472,7 +480,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
         }
     }
 
-    if (showExport) ExportSheet(vm, ui.exporting, onWatermark = { showExport = false; showWatermark = true }) { showExport = false }
+    if (showExport) ExportSheet(vm, ui.exporting, onWatermark = { showExport = false; showWatermark = true }, startAsCard = exportAsCard) { showExport = false }
     if (showPresets) PresetSheet(vm) { showPresets = false }
     if (showWatermark) WatermarkSheet(vm) { showWatermark = false }
     if (showStarMap) StarMapSheet(vm) { showStarMap = false }
@@ -532,10 +540,10 @@ internal fun fitRect(bw: Float, bh: Float, iw: Float, ih: Float): FloatArray {
 }
 
 @Composable
-private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: () -> Unit, onClose: () -> Unit) {
+private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: () -> Unit, startAsCard: Boolean = false, onClose: () -> Unit) {
     val wm by vm.watermark.collectAsState()
     val cs = MaterialTheme.colorScheme
-    var format by remember { mutableStateOf(ExportFormat.JPEG) }
+    var format by remember { mutableStateOf(if (startAsCard) ExportFormat.CARD_JPEG else ExportFormat.JPEG) }
     val mime = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG, ExportFormat.CARD_JPEG -> "image/jpeg"; ExportFormat.PNG, ExportFormat.CARD_PNG -> "image/png"; ExportFormat.TIFF16 -> "image/tiff"; ExportFormat.FITS32 -> "application/fits" }
     val ext = when (format) { ExportFormat.JPEG, ExportFormat.FRAMED_JPEG, ExportFormat.CARD_JPEG -> "jpg"; ExportFormat.PNG, ExportFormat.CARD_PNG -> "png"; ExportFormat.TIFF16 -> "tif"; ExportFormat.FITS32 -> "fits" }
     var showCard by remember { mutableStateOf(false) }
@@ -551,14 +559,19 @@ private fun ExportSheet(vm: EditorViewModel, exporting: Boolean, onWatermark: ()
             }
         }
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp).weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // két sor, mindkettő görgethető – korábban a sor jobb széle (Kártya, FITS) kilógott a képernyőről
+            Text("Kép", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Pill("JPEG", format == ExportFormat.JPEG) { format = ExportFormat.JPEG }
                 Pill("PNG", format == ExportFormat.PNG) { format = ExportFormat.PNG }
                 Pill("TIFF 16 bit", format == ExportFormat.TIFF16) { format = ExportFormat.TIFF16 }
-                Pill("Keretes JPEG", format == ExportFormat.FRAMED_JPEG) { format = ExportFormat.FRAMED_JPEG }
-                Pill("Kártya JPEG", format == ExportFormat.CARD_JPEG) { format = ExportFormat.CARD_JPEG }
-                Pill("Kártya PNG", format == ExportFormat.CARD_PNG) { format = ExportFormat.CARD_PNG }
                 Pill("FITS 32 bit", format == ExportFormat.FITS32) { format = ExportFormat.FITS32 }
+            }
+            Text("Megosztás", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill("Megosztás-kártya JPEG", format == ExportFormat.CARD_JPEG) { format = ExportFormat.CARD_JPEG }
+                Pill("Kártya PNG", format == ExportFormat.CARD_PNG) { format = ExportFormat.CARD_PNG }
+                Pill("Keretes JPEG", format == ExportFormat.FRAMED_JPEG) { format = ExportFormat.FRAMED_JPEG }
             }
             val sizeP by vm.exportSize.collectAsState()
             if (format != ExportFormat.TIFF16 && format != ExportFormat.FITS32) {

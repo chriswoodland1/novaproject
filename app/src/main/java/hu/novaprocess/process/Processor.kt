@@ -594,6 +594,26 @@ object Processor {
         return src
     }
 
+    /**
+     * A luminancia zajának szórása a kép SAJÁT felbontásán: 3×3 csempe (256 px), csempénként a 2 px-es
+     * vízszintes különbségek MAD-jéből (a gradienst és a debayer-korrelációt kiszűri), a csempék mediánja.
+     */
+    fun noiseSigma(img: FloatImage): Float {
+        val w = img.width; val h = img.height; val t = minOf(256, w / 3, h / 3).coerceAtLeast(16)
+        val sig = ArrayList<Float>()
+        for (gy in 0 until 3) for (gx in 0 until 3) {
+            val x0 = (w - t) * gx / 2; val y0 = (h - t) * gy / 2
+            val d = FloatArray(t * (t - 2)); var n = 0
+            for (y in y0 until y0 + t) for (x in x0 until x0 + t - 2) {
+                val i = y * w + x
+                fun l(j: Int) = if (img.channels == 3) 0.299f * img.data[0][j] + 0.587f * img.data[1][j] + 0.114f * img.data[2][j] else img.data[0][j]
+                d[n++] = l(i + 2) - l(i)
+            }
+            val m = median(d); sig += mad(d, m) * 1.4826f / 1.41421356f
+        }
+        sig.sort(); return sig[sig.size / 2].coerceAtLeast(1e-6f)
+    }
+
     /** Midtones Transfer Function (PixInsight/Siril). */
     private fun mtf(m: Float, x: Float): Float {
         if (x <= 0f) return 0f; if (x >= 1f) return 1f

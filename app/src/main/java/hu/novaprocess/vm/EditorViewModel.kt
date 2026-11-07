@@ -401,7 +401,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                         ProcessingBus.progress("Pipeline ${jobIdx + 1}/$totalJobs · ${job.name}", "${p.phase} ${p.current}/${p.total}", if (p.total > 0) p.current * 100 / p.total else 0)
                     }
                     pipeline.update { it.copy(detail = "Automata szerkesztés…") }
-                    val auto = withContext(Dispatchers.Default) { AutoEditor.run(previewSource!!, caption.value.title.ifBlank { null }, res.used, false, primaryObject?.let { hu.novaprocess.catalog.Catalog.autoType(it.type) }) }
+                    val auto = withContext(Dispatchers.Default) { AutoEditor.run(previewSource!!, caption.value.title.ifBlank { null }, res.used, false, primaryObject?.let { hu.novaprocess.catalog.Catalog.autoType(it.type) }, source?.let { Processor.noiseSigma(it) }) }
                     params.value = auto.params
                     persistRecipe()
                     pipeline.update { it.copy(detail = "Export…") }
@@ -595,7 +595,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         val ctx = getApplication<Application>()
         val matches = hu.novaprocess.catalog.Catalog.identify(ctx, f.ra, f.dec, f.fovWDeg, f.fovHDeg)
         val primary = matches.firstOrNull { it.inField }
-        val crop = primary?.let { hu.novaprocess.catalog.Framing.suggest(f, it) }
+        val crop = primary?.let { runCatching { hu.novaprocess.catalog.Framing.suggest(f, it, previewSource) }.getOrNull() }
         sky.value = SkyState(f, matches, crop, sky.value.show)
         if (primary != null) {
             val t = caption.value.title
@@ -605,7 +605,9 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun setSkyFromMeta(m: hu.novaprocess.image.ImageLoader.Meta?, w: Int, h: Int) = setSkyField(hu.novaprocess.catalog.SkyField.fromMeta(m, w, h))
     fun toggleSky() { sky.update { it.copy(show = !it.show) } }
-    fun applySuggestedCrop() { sky.value.crop?.let { c -> commitParams { it.copy(cropLeft = c.left, cropTop = c.top, cropRight = c.right, cropBottom = c.bottom) } } }
+    /** A javasolt vágás NEM kerül alkalmazásra: a szerkesztő vágókeretét nyitja meg előre beállítva (állítható, Alkalmaz/Mégse). */
+    val cropRequest = MutableStateFlow<FloatArray?>(null)
+    fun applySuggestedCrop() { sky.value.crop?.let { c -> cropRequest.value = floatArrayOf(c.left, c.top, c.right, c.bottom) } }
     /** Felirat címe a katalógusból (kézi választás a kontextus-lapon). */
     fun useObjectName(o: hu.novaprocess.catalog.CatObject) { caption.value = caption.value.copy(title = o.title) }
 
@@ -623,7 +625,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val hint = solve.value.result?.annotations?.filter { it.type != "star" }?.maxByOrNull { it.radius }?.names?.firstOrNull() ?: caption.value.title.ifBlank { null }
                 val known = primaryObject?.let { hu.novaprocess.catalog.Catalog.autoType(it.type) }
-                val res = withContext(Dispatchers.Default) { AutoEditor.run(src, hint, lastFrameCount, displayReferred, known) }
+                val full = source
+                val res = withContext(Dispatchers.Default) { AutoEditor.run(src, hint, lastFrameCount, displayReferred, known, full?.let { Processor.noiseSigma(it) }) }
                 auto.value = AutoState(result = res)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Throwable) { auto.value = AutoState(error = e.message ?: e.javaClass.simpleName) }

@@ -1,6 +1,7 @@
 package hu.novaprocess.catalog
 
 import android.content.Context
+import hu.novaprocess.image.FloatImage
 import hu.novaprocess.image.ImageLoader
 import hu.novaprocess.solve.SolveResult
 import kotlin.math.abs
@@ -52,7 +53,10 @@ data class SkyField(
         fun fromMeta(m: ImageLoader.Meta?, width: Int, height: Int): SkyField? {
             if (m == null) return null
             val ra = parseRa(m.ra) ?: return null; val dec = parseDec(m.dec) ?: return null
-            val scale = if (m.focalMm != null && m.focalMm > 0 && m.pixUm != null && m.pixUm > 0) 206.265 * m.pixUm / m.focalMm else DEFAULT_SCALE
+            var scale = if (m.focalMm != null && m.focalMm > 0 && m.pixUm != null && m.pixUm > 0) 206.265 * m.pixUm / m.focalMm else DEFAULT_SCALE
+            // binnelt / drizzle-elt stack: a kép pixele nem azonos a szenzor pixelével
+            val rawLong = maxOf(m.rawW ?: 0, m.rawH ?: 0)
+            if (rawLong > 0) scale *= rawLong.toDouble() / maxOf(width, height)
             return SkyField(ra, dec, scale, width, height, null, 0, "FITS fejléc")
         }
 
@@ -94,28 +98,83 @@ data class CropSuggestion(val left: Float, val top: Float, val right: Float, val
 
 object Framing {
     /**
-     * Kis objektumnál (a látómező rövidebb oldalának < 45 %-a) ajánl vágást: az objektum köré ~2,6× nagyobb keret,
-     * a kép oldalarányával, a képen belül tartva. Tájolás nélkül csak akkor, ha az objektum a kép közepe közelében van.
+     * Vágási javaslat – óvatosan, hogy a lényeg ne vesszen el:
+     *  - csak ha az objektum (katalógus-méret) a rövidebb oldal < 30 %-a;
+     *  - a helyét a KÉP TARTALMÁBÓL keressük (csillagmentesített, elmosott fényességfolt a várt hely közelében),
+     *    a katalógus-pozíció csak kiindulópont (fejléces RA/DEC-nél a Seestar célpontja, nem a valódi képközép);
+     *  - a keret a folt határoló téglalapja + bőséges ráhagyás, legalább a rövidebb oldal 60 %-a és a katalógus-méret 3×-a;
+     *  - a javaslat nem vág automatikusan: a vágókeretet nyitja meg előre beállítva.
+     * @param preview a (vágatlan) forrás kicsinyített lineáris képe
      */
-    fun suggest(f: SkyField, m: Match): CropSuggestion? {
+    fun suggest(f: SkyField, m: Match, preview: FloatImage?): CropSuggestion? {
         val o = m.obj
         if (o.majArcmin <= 0f) return null
         val sizePx = o.majArcmin * 60.0 / f.pixScale
         val shortSide = minOf(f.width, f.height).toDouble()
-        if (sizePx / shortSide > 0.45) return null          // már kitölti a képet
-        val center = f.toPixel(o.ra, o.dec) ?: run {
-            if (m.offsetDeg > 0.12 * minOf(f.fovWDeg, f.fovHDeg)) return null
-            Pair(f.width / 2f, f.height / 2f)
-        }
-        val boxShort = (sizePx * 2.6).coerceIn(shortSide * 0.25, shortSide)
+        if (sizePx / shortSide > 0.30) return null
+        val expected = f.toPixel(o.ra, o.dec)?.let { Pair(it.first / f.width, it.second / f.height) } ?: Pair(0.5f, 0.5f)
+        val blob = preview?.let { locate(it, expected, (sizePx / shortSide).toFloat()) }
+        if (blob == null && !f.oriented && m.offsetDeg > 0.08 * minOf(f.fovWDeg, f.fovHDeg)) return null
         val aspect = f.width.toDouble() / f.height
-        var bw = if (f.width >= f.height) boxShort * aspect else boxShort
-        var bh = if (f.width >= f.height) boxShort else boxShort / aspect
-        bw = bw.coerceAtMost(f.width.toDouble()); bh = bh.coerceAtMost(f.height.toDouble())
-        var l = center.first - bw / 2; var t = center.second - bh / 2
-        l = l.coerceIn(0.0, f.width - bw); t = t.coerceIn(0.0, f.height - bh)
-        val pct = (bw / f.width * 100).toInt()
+        // középpont és szükséges méret (normalizált → px)
+        val cx = (blob?.cx ?: expected.first) * f.width; val cy = (blob?.cy ?: expected.second) * f.height
+        val needW = maxOf((blob?.w ?: 0f) * f.width * 1.8, sizePx * 3.0); val needH = maxOf((blob?.h ?: 0f) * f.height * 1.8, sizePx * 3.0)
+        var bw: Double; var bh: Double
+        val minShort = shortSide * 0.6
+        if (f.width >= f.height) { bh = maxOf(minShort, needH, needW / aspect); bw = bh * aspect } else { bw = maxOf(minShort, needW, needH * aspect); bh = bw / aspect }
+        if (bw >= f.width * 0.92 || bh >= f.height * 0.92) return null   // alig vágna – nem éri meg
+        var l = (cx - bw / 2).coerceIn(0.0, f.width - bw); var t = (cy - bh / 2).coerceIn(0.0, f.height - bh)
         return CropSuggestion((l / f.width).toFloat(), (t / f.height).toFloat(), ((l + bw) / f.width).toFloat(), ((t + bh) / f.height).toFloat(),
-            "${o.id} csak a kép ${"%.0f".format(sizePx / shortSide * 100)} %-át tölti ki → vágás az objektumra ($pct % szélesség, ${(bw).toInt()}×${(bh).toInt()} px)")
+            "${o.id} a kép rövidebb oldalának ~${"%.0f".format(sizePx / shortSide * 100)} %-a" + (if (blob != null) " · helye a képből mérve" else " · hely a koordinátából") +
+            " → keret ${(bw / f.width * 100).toInt()} % szélesség, ${bw.toInt()}×${bh.toInt()} px (állítható)")
+    }
+
+    data class Blob(val cx: Float, val cy: Float, val w: Float, val h: Float)
+
+    /** A várt hely közelében lévő legnagyobb kiterjedt fényességfolt (csillagok kiszűrve). Normalizált koordináták. */
+    fun locate(img: FloatImage, expected: Pair<Float, Float>, sizeFrac: Float): Blob? {
+        val small = img.downscale(320)
+        val w = small.width; val h = small.height
+        val lum = small.toMono().data[0]
+        // nyitás (min, majd max) r=2 → csillagok el; utána doboz-elmosás
+        fun morph(a: FloatArray, isMin: Boolean, r: Int): FloatArray {
+            val t = FloatArray(a.size); val o = FloatArray(a.size)
+            for (y in 0 until h) for (x in 0 until w) { var v = a[y * w + x]; for (d in -r..r) { val s = a[y * w + (x + d).coerceIn(0, w - 1)]; v = if (isMin) minOf(v, s) else maxOf(v, s) }; t[y * w + x] = v }
+            for (y in 0 until h) for (x in 0 until w) { var v = t[y * w + x]; for (d in -r..r) { val s = t[(y + d).coerceIn(0, h - 1) * w + x]; v = if (isMin) minOf(v, s) else maxOf(v, s) }; o[y * w + x] = v }
+            return o
+        }
+        val sm = hu.novaprocess.process.Processor.boxBlur(morph(morph(lum, true, 2), false, 2), w, h, 2)
+        val bg = hu.novaprocess.process.Processor.median(sm)
+        val nz = (hu.novaprocess.process.Processor.mad(sm, bg) * 1.4826f).coerceAtLeast(1e-6f)
+        val thr = bg + 3f * nz
+        val label = IntArray(w * h) { -1 }
+        val ex = expected.first * w; val ey = expected.second * h
+        var best: Blob? = null; var bestScore = 0.0
+        var id = 0
+        val qx = IntArray(w * h); val qy = IntArray(w * h)
+        for (sy in 0 until h) for (sx in 0 until w) {
+            val si = sy * w + sx
+            if (label[si] >= 0 || sm[si] <= thr) continue
+            var head = 0; var tail = 0; qx[tail] = sx; qy[tail] = sy; tail++; label[si] = id
+            var minX = sx; var maxX = sx; var minY = sy; var maxY = sy; var sw = 0.0; var swx = 0.0; var swy = 0.0; var n = 0
+            while (head < tail) {
+                val x = qx[head]; val y = qy[head]; head++
+                val v = (sm[y * w + x] - bg).toDouble(); sw += v; swx += v * x; swy += v * y; n++
+                if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y
+                for ((nx, ny) in arrayOf(Pair(x + 1, y), Pair(x - 1, y), Pair(x, y + 1), Pair(x, y - 1))) {
+                    if (nx !in 0 until w || ny !in 0 until h) continue
+                    val ni = ny * w + nx
+                    if (label[ni] < 0 && sm[ni] > thr) { label[ni] = id; qx[tail] = nx; qy[tail] = ny; tail++ }
+                }
+            }
+            id++
+            if (n < 12) continue
+            val cx = (swx / sw).toFloat(); val cy = (swy / sw).toFloat()
+            val dist = kotlin.math.hypot((cx - ex).toDouble(), (cy - ey).toDouble()) / maxOf(w, h)
+            val score = sw / (1.0 + 8.0 * dist)          // fényes és közel a várt helyhez
+            if (score > bestScore) { bestScore = score; best = Blob(cx / w, cy / h, (maxX - minX + 1).toFloat() / w, (maxY - minY + 1).toFloat() / h) }
+        }
+        // a teljes képet kitöltő „folt” (gradiens / köd mindenhol) nem használható helymeghatározásra
+        return best?.takeIf { it.w < 0.85f || it.h < 0.85f }
     }
 }

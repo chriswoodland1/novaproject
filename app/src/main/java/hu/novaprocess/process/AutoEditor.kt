@@ -182,10 +182,15 @@ object AutoEditor {
     private const val D_NEBULA = 75f; private const val D_GALAXY = 55f; private const val D_STARFIELD = 65f
     private const val BODY_P90_TARGET = 72f / 255f
     private const val SKY_MEDIAN_TARGET = 10f / 255f
-    private const val SKY_MEDIAN_CEIL = 18f / 255f
+    private const val SKY_MEDIAN_CEIL = 22f / 255f   // photon-finish 18/255 MI-zajszűrt adaton; zajos adatnál kicsit világosabb ég, de nem foltos
     private const val SOLVE_TOL = 0.5f / 255f
 
-    fun run(src: FloatImage, nameHint: String?, frames: Int = 0, displayReferred: Boolean = false, knownType: ObjectType? = null): Result {
+    /**
+     * @param fullNoise a luminancia zajának szórása TELJES felbontáson (lineáris 0..1). Az elemzés kicsinyített képen fut,
+     *                  ahol a zaj többszörösen kisebb – a feketepontot viszont a teljes képhez kell igazítani, különben
+     *                  a teljes felbontású égnek akár a fele a feketepont alá esik (foltos, fekete ég).
+     */
+    fun run(src: FloatImage, nameHint: String?, frames: Int = 0, displayReferred: Boolean = false, knownType: ObjectType? = null, fullNoise: Float? = null): Result {
         val a = analyze(src, nameHint, knownType)
         if (displayReferred) return runDisplayReferred(src, a)
         val notes = ArrayList<String>()
@@ -203,8 +208,11 @@ object AutoEditor {
         // 2. zajszűrés
         var dn = when (cat) { Category.NEBULA -> 0.6f; Category.STARFIELD -> 0.6f; Category.GALAXY -> 0.65f }
         if (noisy) dn += 0.1f
-        p = p.copy(denoise = dn.coerceAtMost(0.8f), denoiseRadius = if (dn > 0.6f) 3 else 2, chromaDenoise = if (noisy) 0.8f else 0.6f, chromaRadius = 4)
-        notes += "Zajszűrés ${"%.0f".format(dn * 100)}%${if (noisy) " (+10% zajos/rövid)" else ""} + színzaj-szűrés"
+        // a photon-finish értékei a GraXpert MI-zajszűrőjére vonatkoznak; a saját (stretch utáni) szűrőnk ennél jóval erősebben mos,
+        // ezért ~0.6× arányban képezzük le, hogy ne legyen „műanyag” a kép
+        val dnOwn = (dn * 0.6f).coerceIn(0.25f, 0.5f)
+        p = p.copy(denoise = dnOwn, denoiseRadius = 2, chromaDenoise = if (noisy) 0.8f else 0.6f, chromaRadius = 4)
+        notes += "Zajszűrés: photon-finish ${"%.2f".format(dn)}${if (noisy) " (+0.1 zajos/rövid)" else ""} → saját szűrő ${"%.0f".format(dnOwn * 100)} % + színzaj-szűrés"
 
         // 3. szín
         when {
@@ -230,8 +238,17 @@ object AutoEditor {
         val useBody = extended && maskN > preLum.size / 400
         val targetLabel = if (useBody) "objektum p90 ≈ 72/255" else "ég medián ≈ 10/255"
 
-        var bpK = 0.987f
-        p = p.copy(stretchMode = StretchMode.ASINH, asinhStrength = D, blackPoint = (bpK * medLin).coerceIn(0f, 0.2f))
+        // feketepont: photon-finish 0.987·medián, DE legalább 2.8σ-val a medián alatt (teljes felbontású zaj) – így az ég
+        // legfeljebb ~0.3 %-a vágódik feketére. (A photon-finish ezt GraXpert MI-zajszűrés után mérné, ott a zaj elhanyagolható.)
+        val sigmaFull = (fullNoise ?: a.noise * 3f).coerceAtLeast(1e-6f)
+        var kSig = 2.8f
+        fun bpFor(k: Float) = min(0.987f * medLin, medLin - k * sigmaFull).coerceIn(0f, 0.2f)
+        p = p.copy(stretchMode = StretchMode.ASINH, asinhStrength = D, blackPoint = bpFor(kSig))
+
+        // a stretch utáni, a mért értéket befolyásoló lépések MOST rögzülnek, hogy a megoldás a végleges láncot mérje
+        if (cat == Category.GALAXY && a.dynRange > 20f) { p = p.copy(ghsEnabled = true, ghsD = 1.2f, ghsB = 6f, ghsSP = 0.15f, ghsLP = 0.05f, ghsHP = 0.7f); notes += "Galaxis: GHS (SP 0.15) a halvány korong és porsávok kiemelésére" }
+        var sat = when (cat) { Category.NEBULA -> 0.60f; Category.STARFIELD -> 0.55f; Category.GALAXY -> 0.60f }
+        p = p.copy(saturation = sat * 0.75f)   // a saját telítettség-csúszkánk erősebb, mint a Siril satu
 
         data class M(val sky: Float, val body: Float, val nearBlack: Float, val clip: Float, val pegged: Float)
         fun measure(pp: ProcessParams): M {
@@ -247,7 +264,7 @@ object AutoEditor {
         var iters = 0
         fun solve(): M {
             // m kisebb → világosabb; felezés: ha a metrika a cél alatt van, m-et csökkentjük
-            var lo = 0.02f; var hi = 0.25f; var best = p.copy(mtfMid = 0.1f); var bestM = measure(best); var bestErr = Float.MAX_VALUE
+            var lo = 0.02f; var hi = 0.95f; var best = p.copy(mtfMid = 0.1f); var bestM = measure(best); var bestErr = Float.MAX_VALUE
             val target = if (useBody) BODY_P90_TARGET else SKY_MEDIAN_TARGET
             for (i in 0 until 10) {
                 val m = (lo + hi) / 2f; val pp = p.copy(mtfMid = m); val mm = measure(pp); iters++
@@ -262,31 +279,26 @@ object AutoEditor {
         var m = solve()
         // kétpontos: túl világos ég → bp emelése (soha a medián fölé), újraoldás
         var twoPoint = 0
-        while (m.sky > SKY_MEDIAN_CEIL && bpK < 1f && twoPoint < 2) {
-            bpK = min(1f, bpK + 0.0065f); p = p.copy(blackPoint = (bpK * medLin).coerceIn(0f, 0.2f)); m = solve(); twoPoint++
+        // kétpontos: túl világos ég → bp közelebb a mediánhoz, de legalább 1.5σ-ra maradjon alatta
+        while (m.sky > SKY_MEDIAN_CEIL && kSig > 2.0f && twoPoint < 3) {
+            kSig = (kSig - 0.4f).coerceAtLeast(2.0f); p = p.copy(blackPoint = bpFor(kSig)); m = solve(); twoPoint++
         }
-        notes += "Stretch: asinh (bp = ${"%.3f".format(bpK)}·medián, D = ${"%.0f".format(D)}) + MTF m = ${"%.3f".format(p.mtfMid)} (${targetLabel}; $iters mérés${if (twoPoint > 0) ", kétpontos bp-emelés ×$twoPoint" else ""})"
+        val clippedSky = 0.5f * erfc(kSig / 1.41421356f)
+        notes += "Stretch: asinh (feketepont = medián − ${"%.1f".format(kSig)}σ, D = ${"%.0f".format(D)}) + MTF m = ${"%.3f".format(p.mtfMid)} (${targetLabel}; $iters mérés${if (twoPoint > 0) ", kétpontos bp-emelés ×$twoPoint" else ""}) · teljes felbontáson az ég ~${"%.1f".format(clippedSky * 100)} %-a fekete"
 
-        // galaxis: GHS a korong/porsáv kiemelésére (photon-finish Showcase: SP 0.15)
-        if (cat == Category.GALAXY && a.dynRange > 20f) { p = p.copy(ghsEnabled = true, ghsD = 1.2f, ghsB = 6f, ghsSP = 0.15f, ghsLP = 0.05f, ghsHP = 0.7f); notes += "Galaxis: GHS (SP 0.15) a halvány korong és porsávok kiemelésére" }
-
-        // 5. telítettség
-        var sat = when (cat) { Category.NEBULA -> 0.60f; Category.STARFIELD -> 0.55f; Category.GALAXY -> 0.60f }
-        p = p.copy(saturation = sat)
+        notes += "Telítettség: photon-finish ${"%.2f".format(sat)} → saját ${"%.0f".format(sat * 75)} %"
 
         // 6. csillagok: csak kiterjedt objektumnál csökkentés (screen-blend ~0.45); halmaznál soha
-        if (extended) {
-            p = p.copy(starless = true, starlessRadius = if (a.fwhm > 4.5f) 6 else 4, starsBlend = 0.55f)
-            notes += "Csillagok visszafogása 45 % (csillagtalan réteg + visszakeverés), a köd/galaxis kerül előtérbe"
-        } else notes += "Halmaz/csillagmező: a csillagok a téma – nincs csillagcsökkentés"
+        // photon-finish: „az ajánlott fotó minden csillagot megtart” – a csillagcsökkentett változat csak külön opció
+        notes += if (extended) "Csillagok: mind megmarad (photon-finish ajánlott változat); csillagcsökkentés kézzel: Csillagok fül" else "Halmaz/csillagmező: a csillagok a téma – nincs csillagcsökkentés"
         if (a.fwhm in 2f..4f && cat == Category.GALAXY) p = p.copy(deconvIterations = 5, deconvSigma = (a.fwhm / 2.355f).coerceIn(0.7f, 1.6f))
 
         // 7. QA-kapuk
         var q = measure(p)
         val pegLimit = when (cat) { Category.NEBULA -> 0.20f; Category.STARFIELD -> 0.10f; Category.GALAXY -> 0.15f }
-        if (q.pegged > pegLimit * 0.05f) { sat *= 0.85f; p = p.copy(saturation = sat); q = measure(p); notes += "QA: beragadt színcsatorna → telítettség 0.85×"
-            if (q.pegged > pegLimit * 0.05f) { sat = sat / 0.85f * 0.70f; p = p.copy(saturation = sat); q = measure(p); notes += "QA: még mindig → telítettség 0.70×" } }
-        if (q.nearBlack > 0.02f) { p = p.copy(blackPoint = (p.blackPoint * 0.95f)); q = measure(p); notes += "QA: közel-fekete ${"%.1f".format(q.nearBlack * 100)}% > 2% → feketepont visszavéve" }
+        if (q.pegged > pegLimit * 0.05f) { sat *= 0.85f; p = p.copy(saturation = sat * 0.75f); q = measure(p); notes += "QA: beragadt színcsatorna → telítettség 0.85×"
+            if (q.pegged > pegLimit * 0.05f) { sat = sat / 0.85f * 0.70f; p = p.copy(saturation = sat * 0.75f); q = measure(p); notes += "QA: még mindig → telítettség 0.70×" } }
+        if (q.nearBlack > 0.03f || clippedSky > 0.03f) { kSig += 0.7f; p = p.copy(blackPoint = bpFor(kSig)); q = measure(p); notes += "QA: közel-fekete ég → feketepont lejjebb (medián − ${"%.1f".format(kSig)}σ)" }
         if (q.clip > 0.003f) { p = p.copy(highlights = -0.3f, hdrCompress = 0.25f, hdrRadius = 16); q = measure(p); notes += "QA: kiégett csúcsfények → highlights −0.3, HDR" }
         notes += "Eredmény (előnézeten): ég ${"%.0f".format(q.sky * 255)}/255, ${if (useBody) "objektum p90 ${"%.0f".format(q.body * 255)}/255, " else ""}közel-fekete ${"%.1f".format(q.nearBlack * 100)}%, kiégés ${"%.2f".format(q.clip * 100)}%"
         notes += "Forrás: photon-finish – github.com/ColinB-WB/photon-finish (MIT)"
@@ -310,5 +322,12 @@ object AutoEditor {
         if (med < 0.06f) { p = p.copy(shadows = 0.3f, exposure = 0.3f); notes += "Sötét kép → árnyékok emelése" }
         else if (med > 0.35f) { p = p.copy(blacks = -0.3f, contrast = 0.1f); notes += "Világos háttér → feketék mélyítése" }
         return Result(p, a, notes)
+    }
+
+    /** Komplementer hibafüggvény (Abramowitz–Stegun 7.1.26), a feketére vágott égrész becsléséhez. */
+    private fun erfc(x: Float): Float {
+        val t = 1f / (1f + 0.3275911f * abs(x))
+        val y = t * (0.254829592f + t * (-0.284496736f + t * (1.421413741f + t * (-1.453152027f + t * 1.061405429f)))) * kotlin.math.exp(-x * x)
+        return if (x >= 0) y else 2f - y
     }
 }

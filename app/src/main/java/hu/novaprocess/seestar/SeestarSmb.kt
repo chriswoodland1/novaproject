@@ -154,13 +154,32 @@ object SeestarSmb {
             val dir = File(context.cacheDir, "seestar").apply { mkdirs() }
             val out = File(dir, f.name)
             val total = f.length()
-            f.inputStream.use { ins -> out.outputStream().use { os ->
+            if (out.exists() && out.length() == total && total > 0) { onProgress(total, total); return@onWifi out }   // már letöltve (pl. előnézethez)
+            val tmp = File(dir, f.name + ".part")
+            f.inputStream.use { ins -> tmp.outputStream().use { os ->
                 val buf = ByteArray(1 shl 16); var done = 0L
                 while (true) { val n = ins.read(buf); if (n <= 0) break; os.write(buf, 0, n); done += n; onProgress(done, total) }
             } }
+            out.delete(); tmp.renameTo(out)
             out
         }
     }
+
+    /** Kis, autostretchelt előnézet egy letöltött fájlból (FITS: Bayer-szuperpixel, gyors; JPEG/PNG: mintavételezett dekódolás). */
+    fun previewOf(file: File, maxSide: Int = 480): android.graphics.Bitmap? = runCatching {
+        val n = file.name.lowercase()
+        if (n.endsWith(".fit") || n.endsWith(".fits")) {
+            val (img, cards, raw) = file.inputStream().use { hu.novaprocess.image.FitsReader.readRawOrImage(it) }
+            val small = if (raw != null) hu.novaprocess.stack.FrameAnalyzer.superpixel(raw.third, raw.first, raw.second, (cards["BAYERPAT"] ?: "RGGB").uppercase()).downscale(maxSide)
+                        else img!!.downscale(maxSide)
+            hu.novaprocess.process.Processor.process(small, hu.novaprocess.process.ProcessParams(stretchMode = hu.novaprocess.process.StretchMode.AUTO, mtfMidtones = 0.22f, backgroundNeutralize = true)).toBitmap()
+        } else {
+            val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(file.path, o)
+            var s = 1; while (maxOf(o.outWidth, o.outHeight) / (s * 2) >= maxSide) s *= 2
+            android.graphics.BitmapFactory.decodeFile(file.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = s })
+        }
+    }.getOrNull()
 
     /** Rekurzív FITS-gyűjtés egy mappából (max. mélység 3) – pl. MyWorks/M31 → minden _sub kocka. */
     suspend fun collectFits(context: Context, path: String, depth: Int = 3): List<SmbEntry> = withContext(Dispatchers.IO) {

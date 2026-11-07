@@ -83,7 +83,7 @@ fun SkyContextSheet(vm: EditorViewModel, onClose: () -> Unit) {
                 Column(Modifier.fillMaxWidth().background(cs.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Vágási javaslat", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                     Text(c.reason, style = MaterialTheme.typography.bodySmall)
-                    Button(onClick = { vm.applySuggestedCrop(); onClose() }, shape = CircleShape) { Text("Vágás az objektumra") }
+                    Button(onClick = { vm.applySuggestedCrop(); onClose() }, shape = CircleShape) { Text("Vágókeret az objektumra (állítható)") }
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
