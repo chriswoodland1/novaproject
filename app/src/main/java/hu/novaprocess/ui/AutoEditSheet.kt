@@ -19,6 +19,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -45,15 +49,35 @@ fun AutoEditSheet(vm: EditorViewModel) {
                     Text("Felismert objektum: ${a.type.label}", style = MaterialTheme.typography.titleMedium)
                     Text("Csillagok: ${a.stars} · FWHM %.1f px · gradiens %.0fσ · kiterjedt jel %.1f%% (%s) · dinamika %.0fσ".format(a.fwhm, a.gradient, a.extendedFrac * 100, a.extendedHue, a.dynRange),
                         style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-                    Text("Döntések", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-                    r.notes.forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium) }
+                    vm.primaryObject?.let { o -> Text("Katalógus: ${o.title} · ${o.typeLabel} · ${o.constellationHu}", style = MaterialTheme.typography.bodySmall, color = cs.primary) }
+                    var expanded by remember(r) { mutableStateOf(false) }
+                    val shown = if (expanded) r.notes else r.notes.take(4)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Miért ezt választotta (${r.notes.size} lépés)", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                        TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Kevesebb" else "Mind") }
+                    }
+                    shown.forEach { n -> NoteRow(n) }
                     Text("Alkalmazás után minden csúszka kézzel tovább finomítható; a Visszavonás gombbal az előző állapot visszaáll.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    val ctx = androidx.compose.ui.platform.LocalContext.current
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         TextButton(onClick = { vm.dismissAuto() }) { Text("Mégse") }
+                        TextButton(onClick = { vm.saveAutoAsPreset()?.let { android.widget.Toast.makeText(ctx, "Preset mentve: $it", android.widget.Toast.LENGTH_SHORT).show() } }) { Text("Preset") }
                         Button(onClick = { vm.applyAuto() }, shape = CircleShape, modifier = Modifier.weight(1f).height(50.dp)) { Text("Alkalmazás") }
                     }
                 }
             }
         }
+    }
+}
+
+/** Egy döntés sora: a rövid címke látszik, érintésre a teljes magyarázat kinyílik. */
+@Composable
+private fun NoteRow(note: String) {
+    val cs = MaterialTheme.colorScheme
+    var open by remember(note) { mutableStateOf(false) }
+    val head = note.substringBefore(":").let { if (it.length < note.length && it.length <= 48) it else note.take(60) + if (note.length > 60) "…" else "" }
+    val hasMore = head.length < note.length
+    Column(Modifier.fillMaxWidth().let { if (hasMore) it.clickable { open = !open } else it }) {
+        Text((if (hasMore) (if (open) "▾ " else "▸ ") else "• ") + (if (open || !hasMore) note else head), style = MaterialTheme.typography.bodyMedium, color = if (open || !hasMore) cs.onSurface else cs.onSurface.copy(alpha = 0.85f))
     }
 }

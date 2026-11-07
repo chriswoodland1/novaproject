@@ -56,11 +56,13 @@ object ImageLoader {
         return Triple(img.width, img.height, img.channels)
     }
 
-    data class Meta(val objectName: String?, val exposure: Float?, val dateObs: String?, val ra: String?, val dec: String?, val instrument: String?)
+    data class Meta(val objectName: String?, val exposure: Float?, val dateObs: String?, val ra: String?, val dec: String?, val instrument: String?,
+                    val focalMm: Double? = null, val pixUm: Double? = null)
 
     fun metaOf(cards: Map<String, String>): Meta = Meta(
         cards["OBJECT"]?.takeIf { it.isNotBlank() }, cards["EXPTIME"]?.toFloatOrNull() ?: cards["EXPOSURE"]?.toFloatOrNull(),
-        cards["DATE-OBS"], cards["RA"] ?: cards["OBJCTRA"], cards["DEC"] ?: cards["OBJCTDEC"], cards["INSTRUME"] ?: cards["TELESCOP"]
+        cards["DATE-OBS"], cards["RA"] ?: cards["OBJCTRA"] ?: cards["CRVAL1"], cards["DEC"] ?: cards["OBJCTDEC"] ?: cards["CRVAL2"], cards["INSTRUME"] ?: cards["TELESCOP"],
+        cards["FOCALLEN"]?.toDoubleOrNull(), cards["XPIXSZ"]?.toDoubleOrNull() ?: cards["PIXSIZE1"]?.toDoubleOrNull()
     )
 
     /** Betölt egy képet, FITS esetén a fejléc-metaadatokkal együtt. */

@@ -23,7 +23,8 @@ data class FrameInfo(
     val objectName: String? = null,
     val exposure: Float? = null,
     val dateObs: String? = null,
-    val trail: Boolean = false   // műhold-/repülőcsík
+    val trail: Boolean = false,  // műhold-/repülőcsík
+    val meta: hu.novaprocess.image.ImageLoader.Meta? = null
 )
 
 /**
@@ -87,7 +88,7 @@ object FrameAnalyzer {
             Processor.process(t, ProcessParams()).toBitmap()
         } catch (e: Exception) { null }
 
-        return FrameInfo(uri, name, fwhm, stars.size, bg, ecc, thumb, objectName = meta?.objectName, exposure = meta?.exposure, dateObs = meta?.dateObs, trail = trail)
+        return FrameInfo(uri, name, fwhm, stars.size, bg, ecc, thumb, objectName = meta?.objectName, exposure = meta?.exposure, dateObs = meta?.dateObs, trail = trail, meta = meta)
     }
 
     /**

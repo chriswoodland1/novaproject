@@ -63,7 +63,7 @@ object AutoEditor {
     }
 
     // ------------------------------------------------------------------ elemzés
-    fun analyze(src: FloatImage, nameHint: String?): Analysis {
+    fun analyze(src: FloatImage, nameHint: String?, knownType: ObjectType? = null): Analysis {
         val img = src.downscale(700)
         val w = img.width; val h = img.height
         val lum = img.toMono().data[0]
@@ -121,7 +121,7 @@ object AutoEditor {
         val dynRange = ((maxExt - bg) / noise).coerceAtLeast(0f)
 
         // típus: név > mért jellemzők
-        val byName = typeFromName(nameHint)
+        val byName = knownType?.let { Pair(it, "katalógus") } ?: typeFromName(nameHint)
         val (type, source) = byName ?: Pair(when {
             extendedFrac > 0.04f && hue.startsWith("vörös") -> ObjectType.EMISSION_NEBULA
             extendedFrac > 0.04f && hue == "kék" -> ObjectType.REFLECTION_NEBULA
@@ -185,8 +185,8 @@ object AutoEditor {
     private const val SKY_MEDIAN_CEIL = 18f / 255f
     private const val SOLVE_TOL = 0.5f / 255f
 
-    fun run(src: FloatImage, nameHint: String?, frames: Int = 0, displayReferred: Boolean = false): Result {
-        val a = analyze(src, nameHint)
+    fun run(src: FloatImage, nameHint: String?, frames: Int = 0, displayReferred: Boolean = false, knownType: ObjectType? = null): Result {
+        val a = analyze(src, nameHint, knownType)
         if (displayReferred) return runDisplayReferred(src, a)
         val notes = ArrayList<String>()
         val cat = categoryOf(a.type)

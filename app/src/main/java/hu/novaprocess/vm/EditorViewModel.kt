@@ -149,6 +149,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         captionFromFrames(res.used)
         lastFrameCount = res.used
         solve.value = SolveState()
+        runCatching {
+            setSkyFromMeta(frames.value.firstOrNull { !it.rejected }?.meta, res.image.width, res.image.height)
+            if (sky.value.field == null) hu.novaprocess.catalog.Catalog.find(getApplication(), caption.value.title)?.let { o -> caption.value = caption.value.copy(title = o.title) }
+        }
         withContext(Dispatchers.IO) {
             runCatching {
                 val thumb = Processor.process(res.image.downscale(320), ProcessParams()).toBitmap()
@@ -195,10 +199,14 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val name = ImageLoader.displayName(getApplication<Application>(), uri)
                 val display = ImageLoader.isDisplayReferred(name)
-                val img = withContext(Dispatchers.IO) { if (display) ImageLoader.loadDisplayReferred(getApplication<Application>(), uri, name) else ImageLoader.load(getApplication<Application>(), uri, name) }
+                var meta: ImageLoader.Meta? = null
+                val img = withContext(Dispatchers.IO) { if (display) ImageLoader.loadDisplayReferred(getApplication<Application>(), uri, name) else ImageLoader.loadWithMeta(getApplication<Application>(), uri, name).let { meta = it.second; it.first } }
                 displayReferred = display
                 setSource(img, "$name · ${img.width}×${img.height}" + (if (display) " · kész kép" else ""))
-                caption.value = Caption(title = name.substringBeforeLast('.'), date = java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date()))
+                caption.value = Caption(title = meta?.objectName ?: name.substringBeforeLast('.'), date = meta?.dateObs?.take(10)?.replace('-', '.') ?: java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date()), exposure = meta?.exposure ?: 0f)
+                solve.value = SolveState()
+                runCatching { setSkyFromMeta(meta, img.width, img.height) }
+                if (meta == null) hu.novaprocess.catalog.Catalog.find(getApplication(), name.substringBeforeLast('.'))?.let { o -> caption.value = caption.value.copy(title = o.title) }
                 launch(Dispatchers.IO) {
                     runCatching {
                         val thumb = Processor.process(img.downscale(320), ProcessParams()).toBitmap()
@@ -223,6 +231,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val r = hu.novaprocess.solve.PlateSolver.solve(getApplication(), bmp, src.width, src.height) { st -> solve.update { it.copy(status = st) } }
                 solve.value = SolveState(result = r)
+                runCatching { setSkyField(hu.novaprocess.catalog.SkyField.calibrate(getApplication(), hu.novaprocess.catalog.SkyField.fromSolve(r), r)) }
                 // felirat/objektumnév frissítése a legnagyobb objektumból
                 r.annotations.filter { it.type != "star" && it.type != "hd" }.maxByOrNull { it.radius }?.names?.firstOrNull()?.let { n ->
                     if (caption.value.title.isBlank() || caption.value.title.startsWith("Stack") || caption.value.title.startsWith("Light")) caption.value = caption.value.copy(title = n)
@@ -258,6 +267,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     data class PipelineJob(val name: String, val uris: List<Uri>)
     data class PipelineState(val jobs: List<PipelineJob> = emptyList(), val running: Boolean = false, val current: String = "", val detail: String = "", val done: List<String> = emptyList(), val error: String? = null)
     val pipeline = MutableStateFlow(PipelineState())
+    private val pipelineOutputs = ArrayList<Uri>()
     fun enqueueCurrentFrames() {
         val uris = frames.value.filter { !it.rejected }.map { it.uri }
         if (uris.isEmpty()) return
@@ -342,7 +352,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                         ProcessingBus.progress("Pipeline ${jobIdx + 1}/$totalJobs · ${job.name}", "${p.phase} ${p.current}/${p.total}", if (p.total > 0) p.current * 100 / p.total else 0)
                     }
                     pipeline.update { it.copy(detail = "Automata szerkesztés…") }
-                    val auto = withContext(Dispatchers.Default) { AutoEditor.run(previewSource!!, caption.value.title.ifBlank { null }, res.used) }
+                    val auto = withContext(Dispatchers.Default) { AutoEditor.run(previewSource!!, caption.value.title.ifBlank { null }, res.used, false, primaryObject?.let { hu.novaprocess.catalog.Catalog.autoType(it.type) }) }
                     params.value = auto.params
                     persistRecipe()
                     pipeline.update { it.copy(detail = "Export…") }
@@ -350,13 +360,15 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                     withContext(Dispatchers.Default) {
                         val out = Processor.process(source!!, params.value)
                         val bmp = Watermark.apply(ctx, withInfo(out.toBitmap()), watermark.value)
-                        tree?.createFile("image/jpeg", "$base.jpg")?.uri?.let { u -> ctx.contentResolver.openOutputStream(u)!!.use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) } }
+                        tree?.createFile("image/jpeg", "$base.jpg")?.uri?.let { u -> ctx.contentResolver.openOutputStream(u)!!.use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) }; pipelineOutputs.add(u) }
                         if (framed) tree?.createFile("image/jpeg", "${base}_keret.jpg")?.uri?.let { u -> ctx.contentResolver.openOutputStream(u)!!.use { framed(bmp).compress(Bitmap.CompressFormat.JPEG, 95, it) } }
                     }
                     pipeline.update { it.copy(done = it.done + "${job.name}: ${res.used} kocka → $base.jpg (${auto.analysis.type.label})", jobs = it.jobs.drop(1)) }
                     System.gc()
                 }
                 pipeline.update { it.copy(running = false, current = "", detail = "") }
+                // a kész képek a Kötegelt felirat galériába kerülnek, képenként átnézhető / javítható felirattal
+                if (pipelineOutputs.isNotEmpty()) { runCatching { batchAdd(pipelineOutputs.toList()) }; pipelineOutputs.clear() }
                 ProcessingBus.done("Pipeline kész ✓", pipeline.value.done.joinToString("\n").ifBlank { "Nincs eredmény" })
             } catch (e: kotlinx.coroutines.CancellationException) { pipeline.update { it.copy(running = false, error = "Megszakítva") }; ProcessingBus.failed("Pipeline megszakítva", "") }
             catch (e: Throwable) { System.gc(); pipeline.update { it.copy(running = false, error = (e.message ?: e.toString()), jobs = it.jobs.drop(1)) }; ProcessingBus.failed("Pipeline hiba", e.message ?: e.toString()) }
@@ -440,6 +452,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             obj = (if (cat == "Sh2") "Sh2-" else "$cat ") + m.groupValues[2]
         }
         if (obj.isBlank()) obj = base.substringBefore("_").substringBefore("-")
+        hu.novaprocess.catalog.Catalog.find(getApplication(), obj)?.let { obj = it.title }
         Regex("(20\\d{2})(\\d{2})(\\d{2})").find(base)?.let { m -> date = "${m.groupValues[1]}.${m.groupValues[2]}.${m.groupValues[3]}" }
         if (date.isBlank() && lastModified > 0) date = java.text.SimpleDateFormat("yyyy.MM.dd", java.util.Locale.getDefault()).format(java.util.Date(lastModified))
         obj = obj.replace('_', ' ').trim()
@@ -517,6 +530,32 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------------------------------------------------------------- égi azonosítás (katalógus)
+    data class SkyState(val field: hu.novaprocess.catalog.SkyField? = null, val matches: List<hu.novaprocess.catalog.Match> = emptyList(),
+                        val crop: hu.novaprocess.catalog.CropSuggestion? = null, val show: Boolean = false)
+    val sky = MutableStateFlow(SkyState())
+    val primaryObject: hu.novaprocess.catalog.CatObject? get() = sky.value.matches.firstOrNull { it.inField }?.obj
+
+    /** Látómező beállítása (fejlécből vagy plate solve-ból) → katalógus-egyeztetés, felirat, vágási javaslat. */
+    private fun setSkyField(f: hu.novaprocess.catalog.SkyField?) {
+        if (f == null) { sky.value = SkyState(); return }
+        val ctx = getApplication<Application>()
+        val matches = hu.novaprocess.catalog.Catalog.identify(ctx, f.ra, f.dec, f.fovWDeg, f.fovHDeg)
+        val primary = matches.firstOrNull { it.inField }
+        val crop = primary?.let { hu.novaprocess.catalog.Framing.suggest(f, it) }
+        sky.value = SkyState(f, matches, crop, sky.value.show)
+        if (primary != null) {
+            val t = caption.value.title
+            val generic = t.isBlank() || t.startsWith("Stack") || t.startsWith("Light") || Regex("^(M|NGC|IC|C)\s?\d+$", RegexOption.IGNORE_CASE).matches(t.trim()) || t.contains("_")
+            if (generic) caption.value = caption.value.copy(title = primary.obj.title)
+        }
+    }
+    fun setSkyFromMeta(m: hu.novaprocess.image.ImageLoader.Meta?, w: Int, h: Int) = setSkyField(hu.novaprocess.catalog.SkyField.fromMeta(m, w, h))
+    fun toggleSky() { sky.update { it.copy(show = !it.show) } }
+    fun applySuggestedCrop() { sky.value.crop?.let { c -> commitParams { it.copy(cropLeft = c.left, cropTop = c.top, cropRight = c.right, cropBottom = c.bottom) } } }
+    /** Felirat címe a katalógusból (kézi választás a kontextus-lapon). */
+    fun useObjectName(o: hu.novaprocess.catalog.CatObject) { caption.value = caption.value.copy(title = o.title) }
+
     // ---------------------------------------------------------------- automata szerkesztés
     data class AutoState(val running: Boolean = false, val result: AutoEditor.Result? = null, val error: String? = null)
     val auto = MutableStateFlow(AutoState())
@@ -530,13 +569,21 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             auto.value = AutoState(running = true)
             try {
                 val hint = solve.value.result?.annotations?.filter { it.type != "star" }?.maxByOrNull { it.radius }?.names?.firstOrNull() ?: caption.value.title.ifBlank { null }
-                val res = withContext(Dispatchers.Default) { AutoEditor.run(src, hint, lastFrameCount, displayReferred) }
+                val known = primaryObject?.let { hu.novaprocess.catalog.Catalog.autoType(it.type) }
+                val res = withContext(Dispatchers.Default) { AutoEditor.run(src, hint, lastFrameCount, displayReferred, known) }
                 auto.value = AutoState(result = res)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Throwable) { auto.value = AutoState(error = e.message ?: e.javaClass.simpleName) }
         }
     }
     fun applyAuto() { auto.value.result?.let { applyPreset(it.params) }; auto.value = AutoState() }
+    /** Az automata eredményének mentése presetként (az objektum nevével). */
+    fun saveAutoAsPreset(name: String? = null): String? {
+        val r = auto.value.result ?: return null
+        val n = name?.ifBlank { null } ?: ("Auto · " + (primaryObject?.id ?: r.analysis.type.label) + " · " + java.text.SimpleDateFormat("MM.dd", java.util.Locale.US).format(java.util.Date()))
+        hu.novaprocess.process.Presets.save(getApplication(), n, r.params)
+        return n
+    }
     fun dismissAuto() { auto.value = AutoState() }
 
     // ---------------------------------------------------------------- vízjel

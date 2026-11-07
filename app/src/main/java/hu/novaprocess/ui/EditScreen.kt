@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -204,6 +205,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     var imgBox by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     var showHist by remember { mutableStateOf(true) }
     var showStarMap by remember { mutableStateOf(false) }
+    val sky by vm.sky.collectAsState()
     val pickCompare = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.loadCompare(uri) }
 
     LaunchedEffect(ui.message) { ui.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show(); vm.clearMessage() } }
@@ -248,6 +250,13 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                     modifier = Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y)
                         .let { m -> if (night) m.graphicsLayer(alpha = 0.85f) else m })
             }
+            // azonosított objektum + vágási javaslat (katalógus)
+            sky.matches.firstOrNull { it.inField }?.let { m -> if (scale == 1f && !cropMode) {
+                Row(Modifier.align(Alignment.TopStart).padding(8.dp).background(Color.Black.copy(alpha = 0.55f), androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).clickable { vm.toggleSky() }.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("◎ ${m.obj.title}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF8FE3A8))
+                    if (sky.crop != null && p.cropLeft == 0f && p.cropRight == 1f) Text("Vágás ›", style = MaterialTheme.typography.labelSmall, color = Color(0xFFFFD54F), modifier = Modifier.clickable { vm.applySuggestedCrop() })
+                }
+            } }
             // A/B: a másik kép balról a csúszkáig, a kép fölé rajzolva
             compare?.let { cb -> if (scale == 1f && bmp != null) {
                 androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
@@ -278,6 +287,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Vízjel") }, onClick = { showMenu = false; showWatermark = true })
                         androidx.compose.material3.DropdownMenuItem(text = { Text(if (compare == null) "Összehasonlítás képpel (A/B)…" else "Összehasonlítás kikapcsolása") }, onClick = { showMenu = false; if (compare == null) pickCompare.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*")) else vm.clearCompare() })
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Csillagalak-térkép (fókusz/dőlés)") }, onClick = { showMenu = false; showStarMap = true })
+                        androidx.compose.material3.DropdownMenuItem(text = { Text("Hol van az égen (katalógus)" + (sky.matches.firstOrNull { it.inField }?.let { " · ${it.obj.id}" } ?: "")) }, onClick = { showMenu = false; vm.toggleSky() })
                     }
                 }
                 Spacer(Modifier.size(6.dp))
@@ -457,6 +467,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     if (showPresets) PresetSheet(vm) { showPresets = false }
     if (showWatermark) WatermarkSheet(vm) { showWatermark = false }
     if (showStarMap) StarMapSheet(vm) { showStarMap = false }
+    if (sky.show) SkyContextSheet(vm) { vm.toggleSky() }
     AutoEditSheet(vm)
 }
 
