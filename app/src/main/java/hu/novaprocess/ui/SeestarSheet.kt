@@ -40,7 +40,10 @@ fun SeestarSheet(onPicked: (List<Uri>) -> Unit, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    var host by remember { mutableStateOf(ctx.getSharedPreferences("nova_ui", 0).getString("smb_host", "seestar.local") ?: "seestar.local") }
+    var host by remember { mutableStateOf(ctx.getSharedPreferences("nova_ui", 0).getString("smb_host", "10.0.0.1")?.let { if (it == "seestar.local") "10.0.0.1" else it } ?: "10.0.0.1") }
+    var status by remember { mutableStateOf<String?>(null) }
+    var found by remember { mutableStateOf<List<String>>(emptyList()) }
+    val net = remember { SeestarSmb.netInfo(ctx) }
     var path by remember { mutableStateOf<String?>(null) }
     var entries by remember { mutableStateOf<List<SmbEntry>>(emptyList()) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -51,9 +54,36 @@ fun SeestarSheet(onPicked: (List<Uri>) -> Unit, onClose: () -> Unit) {
     fun open(p: String) {
         loading = true; error = null
         scope.launch {
-            try { entries = SeestarSmb.list(p); path = p; selected = emptySet() }
-            catch (e: Exception) { error = "Nem érhető el: ${e.message ?: e.javaClass.simpleName}" }
+            try { entries = SeestarSmb.list(ctx, p); path = p; selected = emptySet() }
+            catch (e: Exception) { error = SeestarSmb.explain(e, SeestarSmb.netInfo(ctx)) }
             loading = false
+        }
+    }
+    /** Kapcsolódás egy címhez: először az „EMMC Images/MyWorks”, aztán a megosztás gyökere, végül a megosztáslista. */
+    fun connect(h: String) {
+        loading = true; error = null; status = "Kapcsolódás: $h…"
+        ctx.getSharedPreferences("nova_ui", 0).edit().putString("smb_host", h).apply()
+        scope.launch {
+            val candidates = listOf("smb://$h/${SeestarSmb.SHARE}/MyWorks/", "smb://$h/${SeestarSmb.SHARE}/", "smb://$h/")
+            var lastErr: Exception? = null
+            for (c in candidates) {
+                try { entries = SeestarSmb.list(ctx, c); path = c; selected = emptySet(); lastErr = null; break }
+                catch (e: Exception) { lastErr = e }
+            }
+            lastErr?.let { error = SeestarSmb.explain(it, SeestarSmb.netInfo(ctx)) }
+            status = null; loading = false
+        }
+    }
+    fun autoFind() {
+        loading = true; error = null; found = emptyList()
+        scope.launch {
+            try {
+                val hits = SeestarSmb.discover(ctx, host) { status = it }
+                found = hits
+                if (hits.isEmpty()) error = "Nem találtam SMB-eszközt a hálózaton. " + (if (!SeestarSmb.netInfo(ctx).wifiConnected) "Nincs Wi-Fi kapcsolat." else "Ellenőrizd, hogy a Seestar be van kapcsolva és ugyanazon a Wi-Fi-n van (hotspoton: a telefon a Seestar-hoz csatlakozik).")
+                else { status = "Megosztás ellenőrzése…"; val ok = hits.firstOrNull { SeestarSmb.probe(ctx, it) != null } ?: hits.first(); host = ok; connect(ok); return@launch }
+            } catch (e: Exception) { error = SeestarSmb.explain(e, SeestarSmb.netInfo(ctx)) }
+            status = null; loading = false
         }
     }
 
@@ -61,13 +91,18 @@ fun SeestarSheet(onPicked: (List<Uri>) -> Unit, onClose: () -> Unit) {
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Seestar tallózása (SMB)", style = MaterialTheme.typography.headlineMedium)
             if (path == null) {
-                Text("Csatlakozz a Seestar Wi-Fi-jére (vagy legyen egy hálózaton veled állomás módban). A felvételek az „EMMC Images” megosztás MyWorks mappájában vannak.",
+                Text("Csatlakozz a telefonnal a Seestar Wi-Fi-jére (hotspot, cím 10.0.0.1), vagy legyen a Seestar állomás módban a házi hálózaton. A felvételek az „EMMC Images” megosztás MyWorks mappájában vannak; vendég hozzáférés, jelszó nélkül.",
                     style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-                OutlinedTextField(value = host, onValueChange = { host = it }, label = { Text("Cím (seestar.local vagy 10.0.0.1)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text("Hálózat: " + (if (net.wifiConnected) "Wi-Fi ✓" else "nincs Wi-Fi ✗") + (if (net.wifiConnected && !net.hasInternet) " (internet nélkül – ez a Seestar hotspotra jellemző, rendben)" else "") + (net.gateway?.let { " · átjáró $it" } ?: "") + (net.myIp?.let { " · saját IP $it" } ?: ""),
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                Button(onClick = { autoFind() }, enabled = !loading, modifier = Modifier.fillMaxWidth()) { Text(if (loading) (status ?: "Keresés…") else "Automatikus keresés a hálózaton") }
+                if (found.size > 1) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { Text("Találatok:", style = MaterialTheme.typography.labelSmall); found.forEach { h -> TextButton(onClick = { host = h; connect(h) }) { Text(h) } } }
+                OutlinedTextField(value = host, onValueChange = { host = it }, label = { Text("Cím kézzel (IP vagy seestar)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { ctx.getSharedPreferences("nova_ui", 0).edit().putString("smb_host", host).apply(); open("smb://$host/") }, enabled = !loading) { Text(if (loading) "Kapcsolódás…" else "Kapcsolódás") }
+                    Button(onClick = { connect(host.trim()) }, enabled = !loading && host.isNotBlank()) { Text(if (loading) "Kapcsolódás…" else "Kapcsolódás") }
                     SeestarSmb.defaultHosts.filter { it != host }.forEach { h -> TextButton(onClick = { host = h }) { Text(h) } }
                 }
+                status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
             } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text(path!!.removePrefix("smb://").take(48), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
@@ -82,8 +117,8 @@ fun SeestarSheet(onPicked: (List<Uri>) -> Unit, onClose: () -> Unit) {
                     TextButton(enabled = !loading, onClick = {
                         loading = true; error = null
                         scope.launch {
-                            try { val all = SeestarSmb.collectFits(path!!); entries = all; selected = all.map { it.path }.toSet(); if (all.isEmpty()) error = "Nincs FITS ebben a mappában (almappákkal együtt)." }
-                            catch (e: Exception) { error = "Hiba: ${e.message}" }
+                            try { val all = SeestarSmb.collectFits(ctx, path!!); entries = all; selected = all.map { it.path }.toSet(); if (all.isEmpty()) error = "Nincs FITS ebben a mappában (almappákkal együtt)." }
+                            catch (e: Exception) { error = SeestarSmb.explain(e, SeestarSmb.netInfo(ctx)) }
                             loading = false
                         }
                     }) { Text("Mappa szinkron (almappák)") }
@@ -111,7 +146,7 @@ fun SeestarSheet(onPicked: (List<Uri>) -> Unit, onClose: () -> Unit) {
                         val uris = ArrayList<Uri>()
                         dl = 0 to list.size
                         for ((i, p) in list.withIndex()) {
-                            try { uris.add(Uri.fromFile(SeestarSmb.download(ctx, p))) } catch (e: Exception) { error = "Hiba: ${e.message}" }
+                            try { uris.add(Uri.fromFile(SeestarSmb.download(ctx, p))) } catch (e: Exception) { error = SeestarSmb.explain(e, SeestarSmb.netInfo(ctx)) }
                             dl = (i + 1) to list.size
                         }
                         dl = null
