@@ -21,6 +21,7 @@ import hu.novaprocess.work.ProcessingBus
 import java.io.File
 import hu.novaprocess.process.ProcessParams
 import hu.novaprocess.process.Processor
+import hu.novaprocess.process.StretchMode
 import hu.novaprocess.stack.FrameAnalyzer
 import hu.novaprocess.stack.FrameInfo
 import hu.novaprocess.stack.StackOptions
@@ -191,6 +192,54 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun cancelStack() { stackJob?.cancel(); stackState.update { it.copy(running = false, error = "Megszakítva") } }
+
+    // ---------------------------------------------------------------- üstökös mód
+    data class CometState(val running: Boolean = false, val result: hu.novaprocess.stack.CometStacker.Result? = null, val error: String? = null)
+    val comet = MutableStateFlow(CometState())
+    /** A használt kockák időrendben (DATE-OBS, ha van). */
+    fun cometFrames(): List<FrameInfo> = frames.value.filter { !it.rejected }.sortedBy { parseDateObs(it.dateObs) ?: Long.MAX_VALUE }
+    fun parseDateObs(s: String?): Long? {
+        if (s.isNullOrBlank()) return null
+        val t = s.trim().replace(' ', 'T').removeSuffix("Z")
+        for (f in listOf("yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm")) runCatching { return java.text.SimpleDateFormat(f, java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.parse(t.take(f.replace("'", "").length))?.time }
+        return null
+    }
+    /** Lekicsinyített, autostretchelt előnézet egy kockáról (a mag bejelöléséhez). */
+    suspend fun framePreview(uri: Uri, side: Int = 1000): Bitmap? = withContext(Dispatchers.IO) {
+        runCatching {
+            val img = ImageLoader.load(getApplication(), uri).downscale(side)
+            Processor.process(img, ProcessParams(stretchMode = StretchMode.AUTO, mtfMidtones = 0.25f)).toBitmap()
+        }.getOrNull()
+    }
+    fun startCometStack(first: Pair<Float, Float>, last: Pair<Float, Float>, radiusFrac: Float) {
+        val fs = cometFrames()
+        if (fs.size < 3 || stackState.value.running || comet.value.running) return
+        stackJob = viewModelScope.launch {
+            comet.value = CometState(running = true)
+            stackState.update { it.copy(running = true, error = null, log = emptyList()) }
+            ProcessingBus.begin(getApplication(), "Üstökös stack")
+            try {
+                val o = stackOptions.value.copy(binning = if (stackOptions.value.resolution == hu.novaprocess.stack.Resolution.BIN2) 2 else stackOptions.value.binning)
+                val r = hu.novaprocess.stack.CometStacker.stack(getApplication(), fs.map { it.uri }, fs.map { parseDateObs(it.dateObs) }, o,
+                    hu.novaprocess.stack.CometStacker.Options(first, last, radiusFrac)) { p ->
+                    stackState.update { it.copy(progress = p) }
+                    ProcessingBus.progress("Üstökös · ${p.phase}", "${p.current} / ${p.total}", if (p.total > 0) p.current * 100 / p.total else 0)
+                }
+                displayReferred = false
+                setSource(r.image, "Üstökös stack · ${r.used} kocka · ${r.image.width}×${r.image.height}")
+                captionFromFrames(r.used)
+                if (caption.value.title.isBlank() || caption.value.title.startsWith("Stack")) caption.value = caption.value.copy(title = "Üstökös")
+                lastFrameCount = r.used
+                solve.value = SolveState(); sky.value = SkyState()
+                comet.value = CometState(result = r)
+                stackState.update { it.copy(running = false, log = r.log) }
+                ProcessingBus.done("Üstökös stack kész ✓", "${r.used} kocka · mozgás ${"%.1f".format(r.motionPxPerMin)} px/perc")
+            } catch (e: kotlinx.coroutines.CancellationException) { comet.value = CometState(error = "Megszakítva"); stackState.update { it.copy(running = false, error = "Megszakítva") } }
+            catch (e: Throwable) { System.gc(); val m = e.message ?: e.toString(); comet.value = CometState(error = m); stackState.update { it.copy(running = false, error = m) }; ProcessingBus.failed("Üstökös stack hiba", m) }
+        }
+    }
+    /** Csak a csillag- vagy csak a mag-stack megnyitása az eredményből (összehasonlításhoz). */
+    fun openCometLayer(which: Int) { val r = comet.value.result ?: return; setSource(when (which) { 1 -> r.stars; 2 -> r.comet; else -> r.image }, "Üstökös · " + when (which) { 1 -> "csillag-réteg"; 2 -> "mag-réteg"; else -> "kevert" }) }
 
     // ---------------------------------------------------------------- egyetlen kép
     fun openSingle(uri: Uri) {
@@ -821,6 +870,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     fun setCard(s: hu.novaprocess.process.CardSettings) { card.value = s; hu.novaprocess.process.ShareCard.save(getApplication(), s) }
     /** Katalógus-kontextus sor: típus · csillagkép · távolság. */
     fun contextLine(o: hu.novaprocess.catalog.CatObject?): String? = o?.let { listOfNotNull(it.typeLabel.replaceFirstChar { c -> c.uppercase() }, it.constellationHu + " csillagkép", it.distanceLy?.let { d -> hu.novaprocess.catalog.Catalog.formatDistance(d) }).joinToString(" · ") }
+        ?: comet.value.result?.let { r -> "Üstökös · kettős regisztráció" + (if (r.motionPxPerMin > 0f) " · mozgás ${"%.1f".format(r.motionPxPerMin)} px/perc" else "") }
     /** Kártya az aktuális képre: a vízjel csak logóként kerül a kártyára (a képre nem), a felirat a kártya sávjába. */
     private fun cardOf(b: Bitmap): Bitmap = hu.novaprocess.process.ShareCard.render(getApplication(), b, card.value, hu.novaprocess.process.CardData(infoData(), contextLine(primaryObject)), watermark.value)
     fun cardPreview(): Bitmap? = _ui.value.preview?.let { cardOf(it) }

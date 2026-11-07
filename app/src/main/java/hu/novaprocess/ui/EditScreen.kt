@@ -287,6 +287,12 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Vízjel") }, onClick = { showMenu = false; showWatermark = true })
                         androidx.compose.material3.DropdownMenuItem(text = { Text(if (compare == null) "Összehasonlítás képpel (A/B)…" else "Összehasonlítás kikapcsolása") }, onClick = { showMenu = false; if (compare == null) pickCompare.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*")) else vm.clearCompare() })
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Csillagalak-térkép (fókusz/dőlés)") }, onClick = { showMenu = false; showStarMap = true })
+                        val cometR by vm.comet.collectAsState()
+                        if (cometR.result != null) {
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("☄ Üstökös: kevert eredmény") }, onClick = { showMenu = false; vm.openCometLayer(0) })
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("☄ Csak csillag-réteg") }, onClick = { showMenu = false; vm.openCometLayer(1) })
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("☄ Csak mag-réteg") }, onClick = { showMenu = false; vm.openCometLayer(2) })
+                        }
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Hol van az égen (katalógus)" + (sky.matches.firstOrNull { it.inField }?.let { " · ${it.obj.id}" } ?: "")) }, onClick = { showMenu = false; vm.toggleSky() })
                     }
                 }
@@ -517,7 +523,7 @@ private fun PresetSheet(vm: EditorViewModel, onClose: () -> Unit) {
 }
 
 /** ContentScale.Fit elrendezés: [x, y, w, h] a dobozon belül. */
-private fun fitRect(bw: Float, bh: Float, iw: Float, ih: Float): FloatArray {
+internal fun fitRect(bw: Float, bh: Float, iw: Float, ih: Float): FloatArray {
     val s = minOf(bw / iw, bh / ih); val w = iw * s; val h = ih * s
     return floatArrayOf((bw - w) / 2f, (bh - h) / 2f, w, h)
 }

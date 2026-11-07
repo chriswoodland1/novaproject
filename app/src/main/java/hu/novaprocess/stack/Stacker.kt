@@ -32,7 +32,7 @@ data class StackOptions(
 
 data class StackProgress(val phase: String, val current: Int, val total: Int, val detail: String = "")
 
-data class StackResult(val image: FloatImage, val used: Int, val rejected: Int, val log: List<String>)
+data class StackResult(val image: FloatImage, val used: Int, val rejected: Int, val log: List<String>, val transforms: List<Transform?> = emptyList(), val binning: Int = 1)
 
 /**
  * Két menetes stackelés, hogy a memória ne szaladjon el 8 MP-es kockáknál:
@@ -45,7 +45,9 @@ object Stacker {
         context: Context,
         frames: List<Uri>,
         opts: StackOptions,
-        onProgress: (StackProgress) -> Unit
+        onProgress: (StackProgress) -> Unit,
+        fixedTransforms: List<Transform?>? = null,                       // kész (csillag-) transzformációk újrafelhasználása
+        adjust: ((Int, Transform) -> Transform)? = null                  // pl. üstökös-követés: eltolás az időarány szerint
     ): StackResult = withContext(Dispatchers.Default) {
         require(frames.isNotEmpty()) { "Nincs kocka kiválasztva" }
         val log = ArrayList<String>()
@@ -117,10 +119,12 @@ object Stacker {
                 log += "Kihagyva (eltérő méret): ${ImageLoader.displayName(context, uri)}"
                 transforms.add(null); rejected++; continue
             }
-            val tf = when {
+            var tf = when {
+                fixedTransforms != null -> fixedTransforms.getOrNull(idx) ?: Transform(0f, 0f, 0f, 0)
                 !opts.alignFrames || idx == 0 -> Transform(0f, 0f, 0f, Int.MAX_VALUE)
                 else -> Aligner.estimate(refStars, StarDetector.detect(img), w0, h0)
             }
+            if (adjust != null && tf.matches >= opts.minMatches) tf = adjust(idx, tf)
             if (tf.matches < opts.minMatches) {
                 log += "Elvetve (${tf.matches} egyezés): ${ImageLoader.displayName(context, uri)}"
                 transforms.add(null); rejected++; continue
@@ -173,7 +177,7 @@ object Stacker {
         }
         log += "Stack kész: $used kocka felhasználva, $rejected elvetve"
         onProgress(StackProgress("Kész", frames.size, frames.size))
-        StackResult(result, used, rejected, log)
+        StackResult(result, used, rejected, log, transforms, binning)
     }
 
     private fun registered(img: FloatImage, tf: Transform, dz: Int): FloatImage = when {
