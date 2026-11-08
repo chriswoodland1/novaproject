@@ -123,7 +123,7 @@ private val CATEGORIES: List<Pair<String, List<Tool>>> = listOf(
         Tool("ghssp", "GHS szimmetriapont (SP)", 0f, 1f, { "%.2f".format(it) }, get = { it.ghsSP }, set = { p, v -> p.copy(ghsSP = v) }),
         Tool("bge", "Háttér-gradiens kivonás", get = { if (!it.backgroundExtraction) 0f else it.backgroundDegree.toFloat() },
             set = { p, v -> p.copy(backgroundExtraction = v > 0f, backgroundDegree = if (v > 0f) v.toInt() else p.backgroundDegree) },
-            options = listOf("Ki" to 0f, "Sík" to 1f, "Másodfokú" to 2f, "RBF (mintapontok)" to 3f)),
+            options = listOf("Ki" to 0f, "Sík" to 1f, "Másodfokú" to 2f, "RBF (mintapontok)" to 3f, "MI (GraXpert)" to 4f)),
         Tool("bgs", "RBF simaság", 0f, 1f, get = { it.bgSmooth }, set = { p, v -> p.copy(bgSmooth = v) }),
         Tool("scnr", "SCNR zöld-elnyomás", 0f, 1f, get = { it.scnr }, set = { p, v -> p.copy(scnr = v) }),
         Tool("hdr", "HDR magkompresszió", 0f, 1f, get = { it.hdrCompress }, set = { p, v -> p.copy(hdrCompress = v) }),
@@ -211,6 +211,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     val cropReq by vm.cropRequest.collectAsState()
     val videoSt by vm.buildUp.collectAsState()
     var showVideo by remember { mutableStateOf(false) }
+    var showAi by remember { mutableStateOf(false) }
     LaunchedEffect(videoSt.message) { videoSt.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show() } }
     LaunchedEffect(cropReq) { cropReq?.let { req ->
         // a Vágás eszközre váltunk, hogy az Alkalmaz / Mégse gombok látszódjanak
@@ -293,6 +294,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                 Box {
                     IconButton(onClick = { showMenu = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.MoreVert, contentDescription = "Továbbiak", tint = cs.onSurface) }
                     androidx.compose.material3.DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        androidx.compose.material3.DropdownMenuItem(text = { Text("MI-eszközök (GraXpert, AstroSleuth)…") }, onClick = { showMenu = false; showAi = true })
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Megosztás-kártya…") }, onClick = { showMenu = false; exportAsCard = true; showExport = true })
                         androidx.compose.material3.DropdownMenuItem(
                             text = { Text(if (videoSt.running) "Videó készül… ${videoSt.phase} ${videoSt.current}/${videoSt.total}" else "▶ Videó („Így épült fel / készült”)…") },
@@ -492,6 +494,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     if (showWatermark) WatermarkSheet(vm) { showWatermark = false }
     if (showStarMap) StarMapSheet(vm) { showStarMap = false }
     if (sky.show) SkyContextSheet(vm) { vm.toggleSky() }
+    if (showAi) AiSheet(vm) { showAi = false }
     if (showVideo) VideoSheet(vm, initial = if (vm.frames.value.count { !it.rejected } >= 2) EditorViewModel.VideoKind.BUILD_UP else EditorViewModel.VideoKind.EDIT_STEPS) { showVideo = false }
     AutoEditSheet(vm)
 }

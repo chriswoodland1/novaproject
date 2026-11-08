@@ -681,8 +681,86 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     /** Felirat címe a katalógusból (kézi választás a kontextus-lapon). */
     fun useObjectName(o: hu.novaprocess.catalog.CatObject) { caption.value = caption.value.copy(title = o.title) }
 
+    // ---------------------------------------------------------------- MI-eszközök (GraXpert, AstroSleuth)
+    data class AiState(val running: Boolean = false, val phase: String = "", val done: Int = 0, val total: Int = 0, val etaSec: Int = -1, val message: String? = null)
+    data class AiSharpen(val enabled: Boolean = false, val strength: Float = 0.6f, val fast: Boolean = true)
+    val ai = MutableStateFlow(AiState())
+    val aiSharpen = MutableStateFlow(AiSharpen())
+    val aiSample = MutableStateFlow<Pair<Bitmap, Bitmap>?>(null)
+    private var sourceBeforeAi: FloatImage? = null
+    val canUndoAiDenoise get() = sourceBeforeAi != null
+    private var aiJob: kotlinx.coroutines.Job? = null
+
+    fun aiFetch(m: hu.novaprocess.ai.AiModels.Model) { viewModelScope.launch { hu.novaprocess.ai.AiModels.fetch(m) } }
+    fun aiCancel() { aiJob?.cancel() }
+
+    /** A forrás (lineáris, teljes felbontás) cseréje a paraméterek megtartásával. */
+    private fun replaceSource(img: FloatImage) {
+        source = img; previewSource = img.downscale(PREVIEW_SIDE)
+        viewModelScope.launch {
+            val orig = withContext(Dispatchers.Default) { Processor.process(previewSource!!, defaultParams()).toBitmap() }
+            _ui.update { it.copy(originalPreview = orig) }
+        }
+        schedulePreview(immediate = true)
+    }
+
+    /** GraXpert MI-zajszűrés a lineáris forráson (teljes felbontás); visszavonható. */
+    fun aiDenoise(strength: Float) {
+        val src = source ?: return
+        if (ai.value.running) return
+        aiJob = viewModelScope.launch {
+            ai.value = AiState(running = true, phase = "MI-zajszűrés")
+            ProcessingBus.begin(getApplication(), "MI-zajszűrés (GraXpert)")
+            val t0 = System.currentTimeMillis()
+            try {
+                val work = withContext(Dispatchers.Default) {
+                    hu.novaprocess.ai.AiOps.graxpertDenoise(src.copy(), strength) { d, t ->
+                        val el = (System.currentTimeMillis() - t0) / 1000f
+                        val eta = if (d > 0) (el / d * (t - d)).toInt() else -1
+                        ai.value = AiState(true, "MI-zajszűrés", d, t, eta)
+                        ProcessingBus.progress("MI-zajszűrés", "$d / $t csempe · hátra ~${eta / 60} perc ${eta % 60} mp", d * 100 / t.coerceAtLeast(1))
+                    }
+                }
+                sourceBeforeAi = sourceBeforeAi ?: src
+                replaceSource(work)
+                val secs = (System.currentTimeMillis() - t0) / 1000
+                ai.value = AiState(message = "MI-zajszűrés kész (${secs / 60} perc ${secs % 60} mp, erősség ${"%.0f".format(strength * 100)} %). Visszavonható.")
+                ProcessingBus.done("MI-zajszűrés kész ✓", "${secs / 60} perc ${secs % 60} mp")
+            } catch (e: kotlinx.coroutines.CancellationException) { ai.value = AiState(message = "Megszakítva – a kép változatlan.") }
+            catch (e: Throwable) { System.gc(); ai.value = AiState(message = "Hiba: ${e.message ?: e.javaClass.simpleName}"); ProcessingBus.failed("MI-zajszűrés hiba", e.message ?: "") }
+            finally { hu.novaprocess.ai.AiModels.release(hu.novaprocess.ai.AiModels.Model.GRAXPERT_DENOISE) }
+        }
+    }
+    fun undoAiDenoise() { sourceBeforeAi?.let { replaceSource(it); sourceBeforeAi = null; ai.value = AiState(message = "MI-zajszűrés visszavonva.") } }
+
+    /** AstroSleuth-minta: a kész kép közepéből egy kivágás előtte/utána. */
+    fun aiSharpenSample() {
+        val src = previewSource ?: return
+        if (ai.value.running) return
+        aiJob = viewModelScope.launch {
+            ai.value = AiState(running = true, phase = "Minta")
+            try {
+                val pair = withContext(Dispatchers.Default) {
+                    val out = Processor.process(src, params.value)
+                    val crop = Processor.centerCrop(out, 320)
+                    val before = crop.copy().toBitmap()
+                    hu.novaprocess.ai.AiOps.astroSleuth(crop, aiSharpen.value.strength, false) { d, t -> ai.value = AiState(true, "Minta", d, t) }
+                    Pair(before, crop.toBitmap())
+                }
+                aiSample.value = pair; ai.value = AiState()
+            } catch (e: kotlinx.coroutines.CancellationException) { ai.value = AiState() }
+            catch (e: Throwable) { ai.value = AiState(message = "Hiba: ${e.message ?: e.javaClass.simpleName}") }
+        }
+    }
+
     // ---------------------------------------------------------------- automata szerkesztés
-    data class AutoState(val running: Boolean = false, val result: AutoEditor.Result? = null, val error: String? = null)
+    data class AutoState(val running: Boolean = false, val result: AutoEditor.Result? = null, val error: String? = null,
+                         val candidates: List<AutoEditor.Candidate> = emptyList(), val thumbs: List<Bitmap?> = emptyList(), val selected: Int = 0,
+                         val picks: Map<String, Int> = emptyMap(), val category: String = "")
+    private val autoPrefs get() = getApplication<Application>().getSharedPreferences("auto_choice", 0)
+    /** Kategóriánként (köd/galaxis/halmaz) hányszor választottad az egyes stílusokat. */
+    private fun picksFor(cat: String): Map<String, Int> = listOf("pf", "siril", "seestar", "ghs").associateWith { autoPrefs.getInt("$cat:$it", 0) }
+    fun selectCandidate(i: Int) { auto.update { it.copy(selected = i) } }
     val auto = MutableStateFlow(AutoState())
     private var lastFrameCount = 0
 
@@ -697,17 +775,33 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 val known = primaryObject?.let { hu.novaprocess.catalog.Catalog.autoType(it.type) }
                 val full = source
                 val res = withContext(Dispatchers.Default) { AutoEditor.run(src, hint, lastFrameCount, displayReferred, known, full?.let { Processor.centerCrop(it, 1024) }) }
-                auto.value = AutoState(result = res)
+                val cat = AutoEditor.categoryOf(res.analysis.type).name
+                val picks = picksFor(cat)
+                val cands = withContext(Dispatchers.Default) { runCatching { AutoEditor.candidates(src, res) }.getOrElse { listOf(AutoEditor.Candidate("pf", "photon-finish", res.params, "")) } }
+                    .sortedByDescending { picks[it.key] ?: 0 }
+                auto.value = AutoState(running = true, result = res, candidates = cands, picks = picks, category = cat)
+                val small = src.downscale(480)
+                val thumbs = withContext(Dispatchers.Default) { cands.map { c -> runCatching { Processor.process(small, c.params).toBitmap() }.getOrNull() } }
+                auto.value = AutoState(result = res, candidates = cands, thumbs = thumbs, picks = picks, category = cat)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Throwable) { auto.value = AutoState(error = e.message ?: e.javaClass.simpleName) }
         }
     }
-    fun applyAuto() { auto.value.result?.let { applyPreset(it.params) }; auto.value = AutoState() }
+    fun applyAuto() {
+        val st = auto.value
+        val c = st.candidates.getOrNull(st.selected)
+        if (c != null) {
+            applyPreset(c.params)
+            if (st.category.isNotBlank()) autoPrefs.edit().putInt("${st.category}:${c.key}", autoPrefs.getInt("${st.category}:${c.key}", 0) + 1).apply()
+        } else st.result?.let { applyPreset(it.params) }
+        auto.value = AutoState()
+    }
     /** Az automata eredményének mentése presetként (az objektum nevével). */
     fun saveAutoAsPreset(name: String? = null): String? {
         val r = auto.value.result ?: return null
+        val chosen = auto.value.candidates.getOrNull(auto.value.selected)
         val n = name?.ifBlank { null } ?: ("Auto · " + (primaryObject?.id ?: r.analysis.type.label) + " · " + java.text.SimpleDateFormat("MM.dd", java.util.Locale.US).format(java.util.Date()))
-        hu.novaprocess.process.Presets.save(getApplication(), n, r.params)
+        hu.novaprocess.process.Presets.save(getApplication(), n, chosen?.params ?: r.params)
         return n
     }
     fun dismissAuto() { auto.value = AutoState() }
@@ -914,6 +1008,11 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 withContext(Dispatchers.Default) {
                     val out = Processor.process(src, params.value)
+                    val sh = aiSharpen.value
+                    if (sh.enabled && format != ExportFormat.TIFF16 && format != ExportFormat.FITS32 && hu.novaprocess.ai.AiModels.isReady(hu.novaprocess.ai.AiModels.Model.ASTROSLEUTH)) {
+                        _ui.update { it.copy(message = "MI-részletjavítás (AstroSleuth)…") }
+                        hu.novaprocess.ai.AiOps.astroSleuth(out, sh.strength, sh.fast) { d, t -> _ui.update { it.copy(message = "MI-részletjavítás $d / $t csempe…") } }
+                    }
                     val cr = getApplication<Application>().contentResolver
                     cr.openOutputStream(uri)!!.use { os ->
                         when (format) {

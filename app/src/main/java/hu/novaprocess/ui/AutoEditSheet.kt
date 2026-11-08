@@ -1,6 +1,17 @@
 package hu.novaprocess.ui
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,7 +51,7 @@ fun AutoEditSheet(vm: EditorViewModel) {
             when {
                 st.running -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     CircularProgressIndicator(Modifier.height(22.dp), strokeWidth = 2.dp)
-                    Text("Elemzés: háttér, gradiens, színek, csillagok, kiterjedt jel… majd próbafeldolgozás és finomhangolás.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                    Text(if (st.result != null) "Változatok készítése (photon-finish, Siril, Seestar-szerű, GHS)…" else "Elemzés: háttér, gradiens, színek, csillagok, kiterjedt jel… majd próbafeldolgozás és finomhangolás.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                 }
                 st.error != null -> Text("Hiba: ${st.error}", color = cs.error)
                 else -> {
@@ -50,6 +61,25 @@ fun AutoEditSheet(vm: EditorViewModel) {
                     Text("Csillagok: ${a.stars} · FWHM %.1f px · gradiens %.0fσ · kiterjedt jel %.1f%% (%s) · dinamika %.0fσ".format(a.fwhm, a.gradient, a.extendedFrac * 100, a.extendedHue, a.dynRange),
                         style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                     vm.primaryObject?.let { o -> Text("Katalógus: ${o.title} · ${o.typeLabel} · ${o.constellationHu}", style = MaterialTheme.typography.bodySmall, color = cs.primary) }
+                    if (st.candidates.size > 1) {
+                        Text("Válassz stílust – az app megjegyzi, mit szoktál választani ennél a típusnál", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            st.candidates.forEachIndexed { i, c ->
+                                val sel = i == st.selected
+                                Column(Modifier.width(150.dp).border(if (sel) 2.dp else 1.dp, if (sel) cs.primary else cs.outline, RoundedCornerShape(10.dp)).clickable { vm.selectCandidate(i) }.padding(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Box(Modifier.fillMaxWidth().height(150.dp).background(Color.Black, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
+                                        st.thumbs.getOrNull(i)?.let { Image(it.asImageBitmap(), contentDescription = c.label, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
+                                            ?: CircularProgressIndicator(Modifier.height(18.dp), strokeWidth = 2.dp)
+                                    }
+                                    Text(c.label, style = MaterialTheme.typography.labelMedium, color = if (sel) cs.primary else cs.onSurface)
+                                    val n = st.picks[c.key] ?: 0
+                                    if (n > 0) Text("★ eddig ${n}× választottad", style = MaterialTheme.typography.labelSmall, color = Color(0xFFE8C547))
+                                }
+                            }
+                        }
+                        st.candidates.getOrNull(st.selected)?.let { Text(it.note, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
+                    }
                     var expanded by remember(r) { mutableStateOf(false) }
                     val shown = if (expanded) r.notes else r.notes.take(4)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {

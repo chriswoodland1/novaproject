@@ -204,8 +204,9 @@ object AutoEditor {
         val noisy = a.dynRange < 15f || frames in 1..15
 
         // 1. háttér + semlegesítés (mindig)
-        var p = ProcessParams(backgroundExtraction = true, backgroundDegree = if (a.gradient > 12f) 2 else 1, backgroundNeutralize = true, neutralizeAfterStretch = true)
-        notes += "Égbolt-glow kivonás (${if (p.backgroundDegree == 2) "másodfokú" else "sík"}, gradiens ${"%.0f".format(a.gradient)}σ) + háttér semlegesítés"
+        val aiBg = hu.novaprocess.ai.AiModels.isReady(hu.novaprocess.ai.AiModels.Model.GRAXPERT_BGE)
+        var p = ProcessParams(backgroundExtraction = true, backgroundDegree = if (aiBg) 4 else if (a.gradient > 12f) 2 else 1, backgroundNeutralize = true, neutralizeAfterStretch = true)
+        notes += "Égbolt-glow kivonás (${when (p.backgroundDegree) { 4 -> "GraXpert MI-modell, mint a photon-finish-ben"; 2 -> "másodfokú"; else -> "sík" }}, gradiens ${"%.0f".format(a.gradient)}σ) + háttér semlegesítés"
 
         // 2. zajszűrés
         var dn = when (cat) { Category.NEBULA -> 0.6f; Category.STARFIELD -> 0.6f; Category.GALAXY -> 0.65f }
@@ -352,5 +353,37 @@ object AutoEditor {
         val t = 1f / (1f + 0.3275911f * abs(x))
         val y = t * (0.254829592f + t * (-0.284496736f + t * (1.421413741f + t * (-1.453152027f + t * 1.061405429f)))) * kotlin.math.exp(-x * x)
         return if (x >= 0) y else 2f - y
+    }
+
+    // ------------------------------------------------------------------ több változat
+    /**
+     * Ugyanarra az előkészítésre (háttér, szín, zajszűrés) több nyújtási stílus: a felhasználó választ, az app
+     * objektumtípusonként megjegyzi, melyiket szokta választani. Kulcsok: pf (photon-finish), siril, seestar, ghs.
+     */
+    data class Candidate(val key: String, val label: String, val params: ProcessParams, val note: String)
+
+    fun candidates(src: FloatImage, r: Result): List<Candidate> {
+        val base = r.params
+        val out = ArrayList<Candidate>()
+        out += Candidate("pf", "photon-finish", base, "Mért célértékekre oldott asinh + MTF (a Seestar-stackekre hangolt nyílt motor).")
+        if (base.stretchMode == StretchMode.NONE && !base.ghsEnabled) return out   // kész (display-referred) kép: nincs nyújtás
+        val neutral = base.copy(mtfMid = 0f, ghsEnabled = false, blackPoint = 0f, clahe = 0f)
+        out += Candidate("siril", "Siril autostretch", neutral.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.25f, mtfShadowClip = 2.8f),
+            "A Siril / PixInsight STF alapértelmezése: árnyékvágás −2.8 MAD, háttér 0.25-re.")
+        out += Candidate("seestar", "Seestar-szerű", neutral.copy(stretchMode = StretchMode.AUTO, mtfMidtones = 0.16f, mtfShadowClip = 2.2f,
+                saturation = (base.saturation + 0.15f).coerceAtMost(0.8f), vibrance = 0.2f, clahe = 0.22f, claheTiles = 8, claheClip = 1.8f, curveShadows = -0.04f),
+            "Sötétebb ég, erősebb szín és helyi kontraszt – a Seestar saját képeinek jellege.")
+        // GHS a lineáris képen: szimmetriapont a háttéren, D-t úgy választjuk, hogy az ég ~0.10 legyen
+        val probe = src.downscale(360)
+        val lin = Processor.process(probe, base.copy(stretchMode = StretchMode.NONE, mtfMid = 0f, ghsEnabled = false, denoise = 0f, chromaDenoise = 0f, saturation = 0f, clahe = 0f))
+        val sp = Processor.median(lin.toMono().data[0]).coerceIn(0.002f, 0.4f)
+        var best: ProcessParams? = null; var bestErr = Float.MAX_VALUE
+        for (d in floatArrayOf(3f, 5f, 7f, 9f, 12f, 15f, 19f)) {
+            val pp = neutral.copy(stretchMode = StretchMode.NONE, ghsEnabled = true, ghsD = d, ghsB = 6f, ghsSP = sp, ghsLP = 0f, ghsHP = 0.95f)
+            val sky = Processor.median(Processor.process(probe, pp.copy(denoise = 0f, chromaDenoise = 0f)).toMono().data[0])
+            val e = abs(sky - 0.10f); if (e < bestErr) { bestErr = e; best = pp }
+        }
+        best?.let { out += Candidate("ghs", "GHS", it, "Generalized Hyperbolic Stretch a háttérre szimmetrikusan (D = ${"%.0f".format(it.ghsD)}): a halvány rész erősen, a fényes mag kíméletesen nyúlik.") }
+        return out
     }
 }

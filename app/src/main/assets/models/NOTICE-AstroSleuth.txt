@@ -1,0 +1,4 @@
+AstroSleuthFAST.onnx – AstroSleuth (c) Aveygo, https://github.com/Aveygo/AstroSleuth
+License: GNU GPL v2 (model weights: https://huggingface.co/CodingCoda/AstroSleuthModels, gpl-2.0).
+Converted from AstroSleuthFAST.pth (release v3) to ONNX (opset 13, input "data" NCHW float 0..1, output 4x) for NovaProcess,
+without modification of the weights. Conversion script: pth2onnx.py (same folder).

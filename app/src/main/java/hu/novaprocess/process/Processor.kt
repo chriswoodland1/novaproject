@@ -20,7 +20,12 @@ object Processor {
     fun process(src: FloatImage, p: ProcessParams): FloatImage {
         var img = geometry(src, p)
         // --- lineáris lépések ---
-        if (p.backgroundExtraction) img = if (p.backgroundDegree >= 3) backgroundRbf(img, p.bgSamples, p.bgSmooth) else backgroundExtraction(img, p.backgroundDegree)
+        if (p.backgroundExtraction) img = when {
+            p.backgroundDegree >= 4 && hu.novaprocess.ai.AiModels.isReady(hu.novaprocess.ai.AiModels.Model.GRAXPERT_BGE) ->
+                runCatching { backgroundAi(img, p.bgSmooth) }.getOrElse { backgroundRbf(img, p.bgSamples, p.bgSmooth) }
+            p.backgroundDegree >= 3 -> backgroundRbf(img, p.bgSamples, p.bgSmooth)
+            else -> backgroundExtraction(img, p.backgroundDegree)
+        }
         // előbb a csatorna-erősítés (fehéregyensúly), utána az eltolás (háttér-semlegesítés) – így a háttér semleges marad a stretchig
         if (p.whiteBalanceStars) img = whiteBalanceOnStars(img)
         if (p.backgroundNeutralize) img = neutralizeBackground(img)
@@ -337,6 +342,16 @@ object Processor {
 
     // ---------------------------------------------------------------- háttér (gradiens) kivonás
     /** Mintavételes polinomillesztés (1. vagy 2. fokú), 16×16 rács, cellánként alsó 20% medián. */
+    /** GraXpert MI háttérmodell kivonása (a medián megtartásával, mint a többi módnál). */
+    fun backgroundAi(src: FloatImage, smooth: Float): FloatImage {
+        val bg = hu.novaprocess.ai.AiOps.graxpertBackground(src, (smooth * 0.2f).coerceIn(0f, 1f))
+        for (c in 0 until src.channels) {
+            val a = src.data[c]; val b = bg[c]; val m = median(b)
+            for (i in a.indices) a[i] = (a[i] - b[i] + m).coerceIn(0f, 1f)
+        }
+        return src
+    }
+
     fun backgroundExtraction(src: FloatImage, degree: Int): FloatImage {
         val out = src
         val w = src.width; val h = src.height

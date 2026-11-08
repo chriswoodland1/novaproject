@@ -16,6 +16,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }   // ONNX Runtime natív könyvtárai: csak telefon-ABI-k
         applicationId = "hu.novaprocess"
         minSdk = 26
         targetSdk = 35
@@ -62,6 +63,7 @@ android {
         compose = true
         buildConfig = true
     }
+    androidResources { noCompress += listOf("onnx") }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
         resources.excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
@@ -90,6 +92,8 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-exoplayer-rtsp:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
+    // MI-modellek (GraXpert, AstroSleuth) futtatása
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     // Seestar SMB megosztás böngészése (EMMC Images)
     implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
 }
