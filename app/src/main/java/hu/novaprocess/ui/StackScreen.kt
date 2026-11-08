@@ -66,7 +66,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
     var showPlanetary by remember { mutableStateOf(false) }
     var showComet by remember { mutableStateOf(false) }
     val video by vm.buildUp.collectAsState()
-    val saveVideo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri -> if (uri != null) vm.makeBuildUpVideo(uri) }
+    var showVideo by remember { mutableStateOf<EditorViewModel.VideoKind?>(null) }
     var showPipeline by remember { mutableStateOf(false) }
     var showFolder by remember { mutableStateOf(false) }
 
@@ -184,7 +184,7 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
                     }
                     if (st.log.isNotEmpty()) TextButton(onClick = { vm.runAutoEdit(); onOpenEditor() }) { Text("✦ Automata szerkesztés") }
                     if (good >= 3 && !st.running) TextButton(onClick = { showComet = true }) { Text("☄ Üstökös") }
-                    if (good >= 2 && !st.running && !video.running) TextButton(onClick = { saveVideo.launch("igy_epult_fel_${System.currentTimeMillis()}.mp4") }) { Text("▶ Videó") }
+                    if (good >= 2 && !st.running && !video.running) TextButton(onClick = { showVideo = EditorViewModel.VideoKind.BUILD_UP }) { Text("▶ Videó") }
                     Button(onClick = { vm.startStack() }, enabled = good > 0, shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(containerColor = cs.primary, contentColor = cs.onPrimary),
                         modifier = Modifier.height(52.dp)) { Text("Stack", style = MaterialTheme.typography.titleMedium) }
@@ -197,7 +197,8 @@ fun StackScreen(vm: EditorViewModel, onOpenEditor: () -> Unit) {
     if (showFolder) FolderImportSheet(onPicked = { uris, replace -> if (uris.size == 1 && replace) { vm.openSingle(uris[0]); onOpenEditor() } else vm.addFrames(uris, replace) }, onClose = { showFolder = false })
     if (showPlanetary) PlanetarySheet(vm, onDone = onOpenEditor, onClose = { showPlanetary = false })
     if (showComet) CometSheet(vm, onDone = { showComet = false; onOpenEditor() }, onClose = { showComet = false })
-    if (showSeestar) SeestarSheet(onPicked = { vm.addFrames(it) }, onClose = { showSeestar = false })
+    if (showSeestar) SeestarSheet(onPicked = { vm.addFrames(it) }, onClose = { showSeestar = false }, onLiveVideo = { showSeestar = false; showVideo = EditorViewModel.VideoKind.LIVE })
+    showVideo?.let { k -> VideoSheet(vm, initial = k) { showVideo = null } }
 
     if (sheet != null) ModalBottomSheet(onDismissRequest = { sheet = null }, containerColor = cs.surface) {
         Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp).padding(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

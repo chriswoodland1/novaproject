@@ -23,6 +23,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -54,7 +55,7 @@ private enum class LiveMode(val label: String) { STACK("Élő stack"), PREVIEW("
  *  - Videó: RTSP (4554 tele, 4555 nagylátószögű) – a ZWO szerint csak Táj és Naprendszer módban ad képet
  */
 @Composable
-fun SeestarLivePanel(host: String) {
+fun SeestarLivePanel(host: String, onMakeVideo: () -> Unit = {}) {
     val ctx = LocalContext.current
     val cs = MaterialTheme.colorScheme
     var open by remember { mutableStateOf(false) }
@@ -65,6 +66,8 @@ fun SeestarLivePanel(host: String) {
     var info by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    val rec by hu.novaprocess.video.LiveRecorder.recording.collectAsState()
+    val shots by hu.novaprocess.video.LiveRecorder.shots.collectAsState()
 
     Column(Modifier.fillMaxWidth().background(cs.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(12.dp)).padding(horizontal = 10.dp, vertical = 4.dp)) {
         Row(Modifier.fillMaxWidth().clickable { open = !open }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -75,9 +78,11 @@ fun SeestarLivePanel(host: String) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             LiveMode.values().forEach { m -> Pill(m.label, mode == m) { if (mode != m) { mode = m; frame = null; info = ""; error = null } } }
         }
-        if (mode == LiveMode.STACK) Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (mode == LiveMode.STACK) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Frissítés:", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
             listOf(10, 20, 60).forEach { s -> Pill("$s s", interval == s) { interval = s } }
+            Pill(if (rec) "● Felvétel (${shots.size})" else "○ Felvétel", rec) { if (rec) hu.novaprocess.video.LiveRecorder.stop() else hu.novaprocess.video.LiveRecorder.start(ctx) }
+            if (!rec && shots.size >= 2) Pill("▶ Videó (${shots.size})", false) { onMakeVideo() }
         }
         val h = if (big) 420.dp else 200.dp
         Box(Modifier.fillMaxWidth().height(h).padding(vertical = 4.dp).background(Color.Black, RoundedCornerShape(10.dp)).clickable { big = !big }, contentAlignment = Alignment.Center) {
@@ -87,7 +92,7 @@ fun SeestarLivePanel(host: String) {
                         error = null; status = ""
                         try {
                             SeestarLive.run(ctx, host, if (mode == LiveMode.STACK) SeestarLive.Mode.STACK else SeestarLive.Mode.PREVIEW, interval,
-                                onStatus = { status = it }, onFrame = { f -> frame = f.bitmap; info = f.info })
+                                onStatus = { status = it }, onFrame = { f -> frame = f.bitmap; info = f.info; if (mode == LiveMode.STACK) hu.novaprocess.video.LiveRecorder.add(f.bitmap, f.info) })
                         } catch (e: kotlinx.coroutines.CancellationException) { throw e }
                         catch (e: Exception) { error = "Nem érhető el a képcsatorna (${e.message ?: e.javaClass.simpleName}). A Seestar legyen bekapcsolva, a telefon ugyanazon a Wi-Fi-n, és a Seestar appban fusson megfigyelés." }
                     }

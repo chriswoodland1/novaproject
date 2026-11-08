@@ -39,7 +39,7 @@ import kotlinx.coroutines.launch
 
 /** Seestar (SMB) böngésző: megosztás → MyWorks → objektum → _sub mappa → FITS-ek kijelölése → letöltés. */
 @Composable
-fun SeestarSheet(onPicked: (List<Uri>) -> Unit, onClose: () -> Unit) {
+fun SeestarSheet(onPicked: (List<Uri>) -> Unit, onClose: () -> Unit, onLiveVideo: () -> Unit = {}) {
     val ctx = LocalContext.current
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -132,7 +132,7 @@ fun SeestarSheet(onPicked: (List<Uri>) -> Unit, onClose: () -> Unit) {
                 }
                 status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
             } else {
-                SeestarLivePanel(host)
+                SeestarLivePanel(host, onLiveVideo)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text(path!!.removePrefix("smb://").take(48), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                     TextButton(onClick = {

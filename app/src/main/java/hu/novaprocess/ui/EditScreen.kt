@@ -210,7 +210,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     val sky by vm.sky.collectAsState()
     val cropReq by vm.cropRequest.collectAsState()
     val videoSt by vm.buildUp.collectAsState()
-    val saveVideo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri -> if (uri != null) vm.makeBuildUpVideo(uri) }
+    var showVideo by remember { mutableStateOf(false) }
     LaunchedEffect(videoSt.message) { videoSt.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show() } }
     LaunchedEffect(cropReq) { cropReq?.let { req ->
         // a Vágás eszközre váltunk, hogy az Alkalmaz / Mégse gombok látszódjanak
@@ -294,9 +294,9 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
                     IconButton(onClick = { showMenu = true }, modifier = Modifier.clip(CircleShape).background(cs.surface.copy(alpha = 0.8f))) { Icon(Icons.Filled.MoreVert, contentDescription = "Továbbiak", tint = cs.onSurface) }
                     androidx.compose.material3.DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Megosztás-kártya…") }, onClick = { showMenu = false; exportAsCard = true; showExport = true })
-                        if (vm.frames.value.count { !it.rejected } >= 2) androidx.compose.material3.DropdownMenuItem(
-                            text = { Text(if (videoSt.running) "Videó készül… ${videoSt.phase} ${videoSt.current}/${videoSt.total}" else "▶ „Így épült fel” videó (MP4)") },
-                            onClick = { showMenu = false; if (!videoSt.running) saveVideo.launch("igy_epult_fel_${System.currentTimeMillis()}.mp4") })
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(if (videoSt.running) "Videó készül… ${videoSt.phase} ${videoSt.current}/${videoSt.total}" else "▶ Videó („Így épült fel / készült”)…") },
+                            onClick = { showMenu = false; showVideo = true })
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Presetek és receptek") }, onClick = { showMenu = false; showPresets = true })
                         androidx.compose.material3.DropdownMenuItem(text = { Text(if (solve.running) "Plate solve fut…" else "Plate solve (astrometry.net)") }, onClick = { showMenu = false; vm.runSolve() })
                         if (solve.result != null) androidx.compose.material3.DropdownMenuItem(text = { Text(if (solve.show) "Annotációk elrejtése" else "Annotációk mutatása") }, onClick = { showMenu = false; vm.toggleAnnotations() })
@@ -492,6 +492,7 @@ fun EditScreen(vm: EditorViewModel, onBack: () -> Unit) {
     if (showWatermark) WatermarkSheet(vm) { showWatermark = false }
     if (showStarMap) StarMapSheet(vm) { showStarMap = false }
     if (sky.show) SkyContextSheet(vm) { vm.toggleSky() }
+    if (showVideo) VideoSheet(vm, initial = if (vm.frames.value.count { !it.rejected } >= 2) EditorViewModel.VideoKind.BUILD_UP else EditorViewModel.VideoKind.EDIT_STEPS) { showVideo = false }
     AutoEditSheet(vm)
 }
 

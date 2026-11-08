@@ -196,20 +196,68 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------------------------------------------------------- „Így épült fel” videó
     data class VideoState(val running: Boolean = false, val phase: String = "", val current: Int = 0, val total: Int = 0, val message: String? = null)
     val buildUp = MutableStateFlow(VideoState())
-    fun makeBuildUpVideo(out: Uri) {
-        val fs = cometFrames()   // nem kizárt kockák időrendben
-        if (fs.size < 2 || buildUp.value.running) return
+    enum class VideoKind(val label: String) { BUILD_UP("Így épült fel (kockákból)"), EDIT_STEPS("Így készült a szerkesztés"), LIVE("Élő stack felvétele") }
+    val videoOptions = MutableStateFlow(hu.novaprocess.video.VideoOptions())
+    /** Milyen videó-források érhetők el most. */
+    fun availableVideoKinds(): List<VideoKind> = buildList {
+        if (frames.value.count { !it.rejected } >= 2) add(VideoKind.BUILD_UP)
+        if (previewSource != null) add(VideoKind.EDIT_STEPS)
+        if (hu.novaprocess.video.LiveRecorder.shots.value.size >= 2) add(VideoKind.LIVE)
+    }
+    private fun branding(): hu.novaprocess.video.Branding {
+        val c = caption.value
+        val tot = c.frames * c.exposure
+        val info = listOf(listOf(infoOverlay.value.city, c.date).filter { it.isNotBlank() }.joinToString(" · "), c.instrument,
+            if (c.frames > 0 && c.exposure > 0f) "${c.frames} × ${"%.0f".format(c.exposure)} s = " + (if (tot >= 3600) "%.1f óra".format(tot / 3600) else "%.0f perc".format(tot / 60)) else "").filter { it.isNotBlank() }.joinToString(" · ")
+        val wm = watermark.value
+        return hu.novaprocess.video.Branding(c.title, contextLine(primaryObject), info,
+            if (wm.mode == hu.novaprocess.process.WmMode.IMAGE) wm.imagePath else null, card.value.accent)
+    }
+    /** Ráközelítés célja: a katalógus vágási javaslata (ha a kép nincs már kivágva). */
+    private fun zoomTarget(): android.graphics.RectF? {
+        val p = params.value
+        if (p.cropLeft > 0f || p.cropTop > 0f || p.cropRight < 1f || p.cropBottom < 1f) return null
+        return sky.value.crop?.let { android.graphics.RectF(it.left, it.top, it.right, it.bottom) }
+    }
+
+    fun makeVideo(kind: VideoKind, out: Uri) {
+        if (buildUp.value.running) return
+        val opts = videoOptions.value
         viewModelScope.launch {
             buildUp.value = VideoState(running = true, phase = "Indítás")
-            ProcessingBus.begin(getApplication(), "Így épült fel – videó")
+            ProcessingBus.begin(getApplication(), "Videó")
+            val ctx = getApplication<Application>()
             try {
-                val exp = fs.firstOrNull { it.exposure != null }?.exposure ?: caption.value.exposure
-                val n = hu.novaprocess.stack.BuildUpVideo.make(getApplication(), fs.map { it.uri }, exp, params.value, caption.value.title, out) { p ->
-                    buildUp.value = VideoState(true, p.phase, p.current, p.total)
-                    ProcessingBus.progress("Videó · ${p.phase}", "${p.current} / ${p.total}", if (p.total > 0) p.current * 100 / p.total else 0)
+                val scenes: List<hu.novaprocess.video.Scene>; val hold: Float
+                when (kind) {
+                    VideoKind.BUILD_UP -> {
+                        val fs = cometFrames()
+                        val exp = fs.firstOrNull { it.exposure != null }?.exposure ?: caption.value.exposure
+                        scenes = hu.novaprocess.stack.BuildUpVideo.scenes(ctx, fs.map { it.uri }, exp, params.value) { p ->
+                            buildUp.value = VideoState(true, p.phase, p.current, p.total)
+                            ProcessingBus.progress("Videó · ${p.phase}", "${p.current} / ${p.total}", if (p.total > 0) p.current * 100 / p.total else 0)
+                        }
+                        hold = 0.6f
+                    }
+                    VideoKind.EDIT_STEPS -> {
+                        buildUp.value = VideoState(true, "Lépések renderelése", 0, 6)
+                        val src = (source ?: previewSource)!!.downscale(1080)
+                        scenes = withContext(Dispatchers.Default) { hu.novaprocess.video.EditSteps.scenes(src, params.value) }
+                        hold = 1.3f
+                    }
+                    VideoKind.LIVE -> { scenes = withContext(Dispatchers.IO) { hu.novaprocess.video.LiveRecorder.scenes() }; hold = 0.5f }
                 }
-                buildUp.value = VideoState(message = "Kész: $n állomás, ${fs.size} kockából (MP4).")
-                ProcessingBus.done("Videó kész ✓", "$n állomás · ${fs.size} kocka")
+                require(scenes.isNotEmpty()) { "Nincs mit videóba tenni" }
+                val tmp = java.io.File(ctx.cacheDir, "video_${System.currentTimeMillis()}.${opts.output.ext}")
+                withContext(Dispatchers.Default) {
+                    hu.novaprocess.video.VideoComposer.compose(scenes, opts, branding(), zoomTarget(), hold, tmp) { f, t ->
+                        buildUp.value = VideoState(true, "Kódolás", f, t)
+                        ProcessingBus.progress("Videó kódolása", "$f / $t képkocka", if (t > 0) f * 100 / t else 0)
+                    }
+                }
+                withContext(Dispatchers.IO) { ctx.contentResolver.openOutputStream(out)!!.use { os -> tmp.inputStream().use { it.copyTo(os) } }; tmp.delete() }
+                buildUp.value = VideoState(message = "Kész: ${kind.label} · ${scenes.size} állomás (${opts.output.ext.uppercase()}, ${opts.format.label}).")
+                ProcessingBus.done("Videó kész ✓", "${kind.label} · ${scenes.size} állomás")
             } catch (e: kotlinx.coroutines.CancellationException) { buildUp.value = VideoState(message = "Megszakítva") }
             catch (e: Throwable) { System.gc(); buildUp.value = VideoState(message = "Hiba: ${e.message ?: e.javaClass.simpleName}"); ProcessingBus.failed("Videó hiba", e.message ?: "") }
         }
