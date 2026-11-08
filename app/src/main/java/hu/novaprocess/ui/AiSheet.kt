@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -46,6 +47,7 @@ fun AiSheet(vm: EditorViewModel, onClose: () -> Unit) {
     val sample by vm.aiSample.collectAsState()
     val p by vm.params.collectAsState()
     var dnStrength by remember { mutableFloatStateOf(0.5f) }
+    var dnFast by remember { mutableStateOf(true) }
 
     ModalBottomSheet(onDismissRequest = { if (!st.running) onClose() }, containerColor = cs.surface) {
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -89,7 +91,17 @@ fun AiSheet(vm: EditorViewModel, onClose: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             SmallSlider("Erősség", dnStrength, 0.1f, 1f, { "%.0f %%".format(it * 100) }) { dnStrength = it }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.aiDenoise(dnStrength) }, enabled = AiModels.Model.GRAXPERT_DENOISE in installed && !st.running, shape = CircleShape) { Text("MI-zajszűrés indítása") }
+                Pill("Gyors (~2,3× kevesebb csempe)", dnFast) { dnFast = true }
+                Pill("Pontos (GraXpert-azonos)", !dnFast) { dnFast = false }
+            }
+            val prov = AiModels.bestProvider(AiModels.Model.GRAXPERT_DENOISE)
+            val est = vm.aiDenoiseEstimate(dnFast)
+            Text(if (prov == null) "Első indításkor lemérem a telefon gyorsítóit (NNAPI / XNNPACK / CPU) – ez ~1 perc, utána a leggyorsabbal fut."
+                 else "Gyorsító: ${prov.label} · ${AiModels.tileMs(AiModels.Model.GRAXPERT_DENOISE)} ms / csempe" + (est?.let { " · becsült idő ~${it / 60} perc ${it % 60} mp" } ?: ""),
+                style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            if (prov != null) TextButton(onClick = { vm.aiBenchmark() }, enabled = !st.running && AiModels.Model.GRAXPERT_DENOISE in installed) { Text("Gyorsítók újramérése") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { vm.aiDenoise(dnStrength, dnFast) }, enabled = AiModels.Model.GRAXPERT_DENOISE in installed && !st.running, shape = CircleShape) { Text("MI-zajszűrés indítása") }
                 if (vm.canUndoAiDenoise) OutlinedButton(onClick = { vm.undoAiDenoise() }, enabled = !st.running) { Text("Visszavonás") }
             }
             HorizontalDivider()

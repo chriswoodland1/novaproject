@@ -64,8 +64,41 @@ object AiOps {
 
     // ------------------------------------------------------------------ GraXpert MI-zajszűrés
     /** Lineáris kép zajszűrése (erősség 0..1): a bemenetet nem módosítja, új képet ad. onProgress(kész csempe, összes). */
-    suspend fun graxpertDenoise(img: FloatImage, strength: Float, onProgress: (Int, Int) -> Unit): FloatImage {
-        val win = 256; val stride = 128; val off = (win - stride) / 2; val thr = 10f
+    /**
+     * Végrehajtók lemérése egy próbacsempével (NNAPI, XNNPACK, CPU) – a leggyorsabb megjegyzésre kerül.
+     * onStatus: emberi szöveg a mérés közben.
+     */
+    suspend fun benchmarkDenoise(onStatus: (String) -> Unit): Pair<AiModels.Provider, Long> {
+        val m = AiModels.Model.GRAXPERT_DENOISE
+        val buf = FloatBuffer.allocate(256 * 256 * 3); val rnd = java.util.Random(1)
+        for (i in 0 until buf.capacity()) buf.put((rnd.nextGaussian() * 0.05).toFloat()); buf.rewind()
+        var best: Pair<AiModels.Provider, Long>? = null
+        for (p in listOf(AiModels.Provider.NNAPI, AiModels.Provider.XNNPACK, AiModels.Provider.CPU)) {
+            coroutineContext.ensureActive()
+            onStatus("Gyorsító mérése: ${p.label}…")
+            val ms = runCatching {
+                val s = AiModels.session(m, p)
+                fun once(): Long { val t0 = System.nanoTime(); OnnxTensor.createTensor(AiModels.env, buf.duplicate(), longArrayOf(1, 256, 256, 3)).use { t -> s.run(mapOf(s.inputNames.first() to t)).close() }; return (System.nanoTime() - t0) / 1_000_000 }
+                once()                       // bemelegítés (gráf-fordítás)
+                minOf(once(), once())
+            }.getOrNull()
+            AiModels.release(m)
+            if (ms != null && (best == null || ms < best.second)) best = Pair(p, ms)
+            onStatus("${p.label}: ${ms?.let { "$it ms / csempe" } ?: "nem támogatott"}")
+        }
+        val b = requireNotNull(best) { "Egyik végrehajtó sem futtatta a modellt" }
+        AiModels.saveBenchmark(m, b.first, b.second)
+        return b
+    }
+
+    /** Csempék száma adott lépésközzel (az ETA-becsléshez). */
+    fun denoiseTiles(w: Int, h: Int, fast: Boolean): Int { val st = if (fast) 192 else 128; return (h / st + 1) * (w / st + 1) }
+
+    /**
+     * @param fast  true: 192-es lépés (32 px szegély) → ~2.25× kevesebb csempe; false: a GraXpert-azonos 128-as lépés
+     */
+    suspend fun graxpertDenoise(img: FloatImage, strength: Float, fast: Boolean = true, onProgress: (Int, Int) -> Unit): FloatImage {
+        val win = 256; val stride = if (fast) 192 else 128; val off = (win - stride) / 2; val thr = 10f
         val (med, mad) = medMad(img)
         val w = img.width; val h = img.height
         val ith = h / stride + 1; val itw = w / stride + 1
@@ -73,7 +106,8 @@ object AiOps {
         val res = FloatImage(w, h, img.channels)                   // az eredmény tömbjei egyben a munkaterület (nincs harmadik példány)
         for (c in 0 until img.channels) System.arraycopy(img.data[c], 0, res.data[c], 0, w * h)
         val out = res.data
-        val total = ith * itw; val batch = 2
+        val total = ith * itw
+        val batch = if (AiModels.bestProvider(AiModels.Model.GRAXPERT_DENOISE) == AiModels.Provider.NNAPI) 1 else 2   // NNAPI: rögzített alak
         val inBuf = FloatBuffer.allocate(batch * win * win * 3)
         val copies = Array(batch) { FloatArray(win * win * 3) }
         // a GraXpert a képet lent/jobbra tükrözve kiegészíti, körben `off` pixellel – itt index-tükrözéssel

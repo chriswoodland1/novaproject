@@ -705,26 +705,51 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** GraXpert MI-zajszűrés a lineáris forráson (teljes felbontás); visszavonható. */
-    fun aiDenoise(strength: Float) {
+    /** Becsült idő másodpercben a mért csempeidőből (null: még nincs mérve). */
+    fun aiDenoiseEstimate(fast: Boolean): Int? {
+        val src = source ?: return null
+        val ms = hu.novaprocess.ai.AiModels.tileMs(hu.novaprocess.ai.AiModels.Model.GRAXPERT_DENOISE).takeIf { it > 0 } ?: return null
+        return (hu.novaprocess.ai.AiOps.denoiseTiles(src.width, src.height, fast) * ms / 1000).toInt()
+    }
+    /** Gyorsítók újramérése (pl. ha más lett a telefon állapota). */
+    fun aiBenchmark() {
+        if (ai.value.running) return
+        aiJob = viewModelScope.launch {
+            ai.value = AiState(running = true, phase = "Gyorsító mérése")
+            try {
+                val (p, ms) = withContext(Dispatchers.Default) { hu.novaprocess.ai.AiOps.benchmarkDenoise { ai.value = AiState(true, it) } }
+                ai.value = AiState(message = "Leggyorsabb: ${p.label} · $ms ms / csempe")
+            } catch (e: kotlinx.coroutines.CancellationException) { ai.value = AiState() }
+            catch (e: Throwable) { ai.value = AiState(message = "Hiba: ${e.message ?: e.javaClass.simpleName}") }
+        }
+    }
+
+    fun aiDenoise(strength: Float, fast: Boolean = true) {
         val src = source ?: return
         if (ai.value.running) return
         aiJob = viewModelScope.launch {
             ai.value = AiState(running = true, phase = "MI-zajszűrés")
             ProcessingBus.begin(getApplication(), "MI-zajszűrés (GraXpert)")
+            try {
+                if (hu.novaprocess.ai.AiModels.bestProvider(hu.novaprocess.ai.AiModels.Model.GRAXPERT_DENOISE) == null)
+                    withContext(Dispatchers.Default) { hu.novaprocess.ai.AiOps.benchmarkDenoise { ai.value = AiState(true, it); ProcessingBus.progress("MI-zajszűrés", it, 0) } }
+            } catch (e: kotlinx.coroutines.CancellationException) { ai.value = AiState(message = "Megszakítva – a kép változatlan."); return@launch }
+            catch (e: Throwable) { /* mérés nélkül sima CPU-val megy tovább */ }
+            val prov = hu.novaprocess.ai.AiModels.bestProvider(hu.novaprocess.ai.AiModels.Model.GRAXPERT_DENOISE) ?: hu.novaprocess.ai.AiModels.Provider.CPU
             val t0 = System.currentTimeMillis()
             try {
                 val work = withContext(Dispatchers.Default) {
-                    hu.novaprocess.ai.AiOps.graxpertDenoise(src, strength) { d, t ->
+                    hu.novaprocess.ai.AiOps.graxpertDenoise(src, strength, fast) { d, t ->
                         val el = (System.currentTimeMillis() - t0) / 1000f
                         val eta = if (d > 0) (el / d * (t - d)).toInt() else -1
-                        ai.value = AiState(true, "MI-zajszűrés", d, t, eta)
+                        ai.value = AiState(true, "MI-zajszűrés · ${prov.label} · ${if (fast) "gyors" else "pontos"}", d, t, eta)
                         ProcessingBus.progress("MI-zajszűrés", "$d / $t csempe · hátra ~${eta / 60} perc ${eta % 60} mp", d * 100 / t.coerceAtLeast(1))
                     }
                 }
                 sourceBeforeAi = sourceBeforeAi ?: src
                 replaceSource(work)
                 val secs = (System.currentTimeMillis() - t0) / 1000
-                ai.value = AiState(message = "MI-zajszűrés kész (${secs / 60} perc ${secs % 60} mp, erősség ${"%.0f".format(strength * 100)} %). Visszavonható.")
+                ai.value = AiState(message = "MI-zajszűrés kész (${secs / 60} perc ${secs % 60} mp, ${prov.label}, ${if (fast) "gyors" else "pontos"} mód, erősség ${"%.0f".format(strength * 100)} %). Visszavonható.")
                 ProcessingBus.done("MI-zajszűrés kész ✓", "${secs / 60} perc ${secs % 60} mp")
             } catch (e: kotlinx.coroutines.CancellationException) { ai.value = AiState(message = "Megszakítva – a kép változatlan.") }
             catch (e: Throwable) { System.gc(); ai.value = AiState(message = "Hiba: ${e.message ?: e.javaClass.simpleName}"); ProcessingBus.failed("MI-zajszűrés hiba", e.message ?: "") }

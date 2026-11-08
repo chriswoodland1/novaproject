@@ -106,16 +106,31 @@ object AiModels {
         inputStream.bufferedReader().readText()
     }
 
-    /** ONNX munkamenet (gyorsítótárazva). A nagy modellekhez az összes magot használja. */
-    fun session(m: Model): OrtSession = synchronized(sessions) {
-        sessions[m] ?: run {
-            val f = requireNotNull(fileOf(m)) { "${m.label}: a modell nincs letöltve" }
-            val opts = OrtSession.SessionOptions().apply {
-                setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceIn(2, 8))
-                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+    /** Végrehajtó: sima CPU, XNNPACK (ARM-re optimalizált CPU-kernelek), NNAPI (a telefon NPU/GPU-ja, FP16). */
+    enum class Provider(val label: String) { CPU("CPU"), XNNPACK("XNNPACK (optimalizált CPU)"), NNAPI("NNAPI (NPU/GPU)") }
+    private val sessionProvider = HashMap<Model, Provider>()
+    private val prefs get() = appCtx.getSharedPreferences("ai_models", 0)
+    /** A modellhez mért leggyorsabb végrehajtó (null: még nincs mérve). */
+    fun bestProvider(m: Model): Provider? = prefs.getString("prov:${m.name}", null)?.let { runCatching { Provider.valueOf(it) }.getOrNull() }
+    fun tileMs(m: Model): Long = prefs.getLong("ms:${m.name}", -1)
+    fun saveBenchmark(m: Model, p: Provider, ms: Long) { prefs.edit().putString("prov:${m.name}", p.name).putLong("ms:${m.name}", ms).apply() }
+    fun clearBenchmark(m: Model) { prefs.edit().remove("prov:${m.name}").remove("ms:${m.name}").apply() }
+
+    /** ONNX munkamenet (gyorsítótárazva) a kért / mért végrehajtóval. */
+    fun session(m: Model, provider: Provider? = null): OrtSession = synchronized(sessions) {
+        val want = provider ?: bestProvider(m) ?: Provider.CPU
+        sessions[m]?.let { if (sessionProvider[m] == want) return it; it.close(); sessions.remove(m) }
+        val f = requireNotNull(fileOf(m)) { "${m.label}: a modell nincs letöltve" }
+        val cores = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
+        val opts = OrtSession.SessionOptions().apply {
+            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            when (want) {
+                Provider.CPU -> setIntraOpNumThreads(cores)
+                Provider.XNNPACK -> { setIntraOpNumThreads(1); addXnnpack(mapOf("intra_op_num_threads" to cores.toString())) }
+                Provider.NNAPI -> { setIntraOpNumThreads(cores); addNnapi(java.util.EnumSet.of(ai.onnxruntime.providers.NNAPIFlags.USE_FP16)) }
             }
-            env.createSession(f.path, opts).also { sessions[m] = it }
         }
+        env.createSession(f.path, opts).also { sessions[m] = it; sessionProvider[m] = want }
     }
     fun release(m: Model) = synchronized(sessions) { sessions.remove(m)?.close() }
 }
