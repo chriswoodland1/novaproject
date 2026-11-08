@@ -714,7 +714,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             val t0 = System.currentTimeMillis()
             try {
                 val work = withContext(Dispatchers.Default) {
-                    hu.novaprocess.ai.AiOps.graxpertDenoise(src.copy(), strength) { d, t ->
+                    hu.novaprocess.ai.AiOps.graxpertDenoise(src, strength) { d, t ->
                         val el = (System.currentTimeMillis() - t0) / 1000f
                         val eta = if (d > 0) (el / d * (t - d)).toInt() else -1
                         ai.value = AiState(true, "MI-zajszűrés", d, t, eta)

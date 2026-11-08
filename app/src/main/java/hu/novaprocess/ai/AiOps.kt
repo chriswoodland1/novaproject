@@ -63,14 +63,16 @@ object AiOps {
     }
 
     // ------------------------------------------------------------------ GraXpert MI-zajszűrés
-    /** Lineáris kép zajszűrése helyben (erősség 0..1). onProgress(kész csempe, összes). */
+    /** Lineáris kép zajszűrése (erősség 0..1): a bemenetet nem módosítja, új képet ad. onProgress(kész csempe, összes). */
     suspend fun graxpertDenoise(img: FloatImage, strength: Float, onProgress: (Int, Int) -> Unit): FloatImage {
         val win = 256; val stride = 128; val off = (win - stride) / 2; val thr = 10f
         val (med, mad) = medMad(img)
         val w = img.width; val h = img.height
         val ith = h / stride + 1; val itw = w / stride + 1
         val env = AiModels.env; val s = AiModels.session(AiModels.Model.GRAXPERT_DENOISE)
-        val out = Array(img.channels) { img.data[it].copyOf() }
+        val res = FloatImage(w, h, img.channels)                   // az eredmény tömbjei egyben a munkaterület (nincs harmadik példány)
+        for (c in 0 until img.channels) System.arraycopy(img.data[c], 0, res.data[c], 0, w * h)
+        val out = res.data
         val total = ith * itw; val batch = 2
         val inBuf = FloatBuffer.allocate(batch * win * win * 3)
         val copies = Array(batch) { FloatArray(win * win * 3) }
@@ -116,12 +118,12 @@ object AiOps {
             }
             b += n; onProgress(b, total)
         }
-        // keverés az eredetivel (a küszöb feletti pixelek eredetiek maradnak)
+        // keverés az eredetivel (a küszöb feletti pixelek eredetiek maradnak) – az eredménybe írva
         for (c in 0 until img.channels) {
             val cut = thr / 0.04f * mad[c] + med[c]; val o = img.data[c]; val d = out[c]
-            for (i in o.indices) { val dn = if (o[i] < cut) d[i] else o[i]; o[i] = (dn * strength + o[i] * (1 - strength)).coerceIn(0f, 1f) }
+            for (i in o.indices) { val dn = if (o[i] < cut) d[i] else o[i]; d[i] = (dn * strength + o[i] * (1 - strength)).coerceIn(0f, 1f) }
         }
-        return img
+        return res
     }
 
     // ------------------------------------------------------------------ AstroSleuth részletjavító
